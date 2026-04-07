@@ -1,0 +1,11 @@
+# AWS official PDF documentation to sync to Knowledge Base
+# Format: name url
+# Lines starting with # are ignored
+# Add or remove docs as needed
+
+s3 https://docs.aws.amazon.com/pdfs/AmazonS3/latest/userguide/s3-userguide.pdf
+dynamodb https://docs.aws.amazon.com/pdfs/amazondynamodb/latest/developerguide/dynamodb-dg.pdf
+lambda https://docs.aws.amazon.com/pdfs/lambda/latest/dg/lambda-dg.pdf
+eks https://docs.aws.amazon.com/pdfs/eks/latest/userguide/eks-ug.pdf
+rds https://docs.aws.amazon.com/pdfs/AmazonRDS/latest/UserGuide/rds-ug.pdf
+iam https://docs.aws.amazon.com/pdfs/IAM/latest/UserGuide/iam-ug.pdf
