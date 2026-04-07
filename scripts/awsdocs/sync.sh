@@ -17,29 +17,31 @@ grep -v '^\s*#' "${REPOS_FILE}" | grep -v '^\s*$' | while read -r repo; do
   echo "=== Cloning ${repo} ==="
   git clone --depth 1 "https://github.com/${repo}.git" "${BUILD_DIR}/${repo_name}"
 
-  # Find doc_source directory (standard awsdocs structure)
-  doc_dir="${BUILD_DIR}/${repo_name}/doc_source"
-  if [ ! -d "${doc_dir}" ]; then
-    echo "No doc_source/ found in ${repo_name}, skipping"
-    rm -rf "${BUILD_DIR}/${repo_name}"
+  # Collect all markdown files into a flat output directory
+  out_dir="${BUILD_DIR}/out/${repo_name}"
+  mkdir -p "${out_dir}"
+  find "${BUILD_DIR}/${repo_name}" -name '*.md' \
+    ! -name 'README.md' ! -name 'CONTRIBUTING.md' ! -name 'LICENSE*' \
+    ! -path '*/.github/*' \
+    -exec cp {} "${out_dir}/" \;
+
+  md_count=$(find "${out_dir}" -name '*.md' | wc -l | tr -d ' ')
+  if [ "${md_count}" -eq 0 ]; then
+    echo "No markdown docs found in ${repo_name}, skipping"
+    rm -rf "${BUILD_DIR}/${repo_name}" "${out_dir}"
     continue
   fi
 
-  # Keep only markdown files
-  find "${doc_dir}" -type f ! -name '*.md' -delete
-  find "${doc_dir}" -type d -empty -delete
-
-  md_count=$(find "${doc_dir}" -name '*.md' | wc -l | tr -d ' ')
   echo "Found ${md_count} markdown files in ${repo_name}"
 
   # Sync to S3
   echo "Syncing ${repo_name} to s3://${S3_BUCKET}/documents/${repo_name}/"
   aws s3 sync --delete \
-    "${doc_dir}/" \
+    "${out_dir}/" \
     "s3://${S3_BUCKET}/documents/${repo_name}/"
 
   # Cleanup
-  rm -rf "${BUILD_DIR}/${repo_name}"
+  rm -rf "${BUILD_DIR}/${repo_name}" "${out_dir}"
   echo ""
 done
 
