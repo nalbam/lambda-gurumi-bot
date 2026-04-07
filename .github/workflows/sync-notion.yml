@@ -33,12 +33,11 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install python-notion-exporter
+        run: pip install notion-exporter
 
       - name: Export Notion pages to Markdown
         env:
-          NOTION_TOKEN_V2: ${{ secrets.NOTION_TOKEN_V2 }}
-          NOTION_FILE_TOKEN: ${{ secrets.NOTION_FILE_TOKEN }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
         run: python examples/notion/notion_exporter.py
 
       - name: Configure AWS credentials

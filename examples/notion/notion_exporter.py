@@ -1,26 +1,31 @@
 import os
+import pathlib
 
-from python_notion_exporter import NotionExporter, ExportType, ViewExportType
+from notion_exporter import NotionExporter
 
 
-NOTION_TOKEN_V2 = os.getenv("NOTION_TOKEN_V2")
-NOTION_FILE_TOKEN = os.getenv("NOTION_FILE_TOKEN")
+NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 
 NOTION_PAGE_NAME = os.getenv("NOTION_PAGE_NAME", "demo")
 NOTION_PAGE_ID = os.getenv("NOTION_PAGE_ID", "7aace0412a82431996f61a29225a95ec")
 
 
 if __name__ == "__main__":
-    exporter = NotionExporter(
-        token_v2=NOTION_TOKEN_V2,
-        file_token=NOTION_FILE_TOKEN,
-        pages={NOTION_PAGE_NAME: NOTION_PAGE_ID},
-        export_directory="build",
-        flatten_export_file_tree=True,
-        export_type=ExportType.MARKDOWN,
-        current_view_export_type=ViewExportType.CURRENT_VIEW,
-        include_files=False,
+    if not NOTION_TOKEN:
+        raise ValueError("NOTION_TOKEN environment variable is required")
+
+    exporter = NotionExporter(notion_token=NOTION_TOKEN)
+    exported_pages = exporter.export_pages(
+        page_ids=[NOTION_PAGE_ID],
         recursive=True,
-        export_name=NOTION_PAGE_NAME,
     )
-    exporter.process()
+
+    output_dir = pathlib.Path("build") / NOTION_PAGE_NAME
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for page_id, content in exported_pages.items():
+        file_path = output_dir / f"{page_id}.md"
+        file_path.write_text(content, encoding="utf-8")
+        print(f"Exported: {file_path}")
+
+    print(f"Exported {len(exported_pages)} pages to {output_dir}")

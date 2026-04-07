@@ -86,14 +86,15 @@ reaction_added
 cp .env.example .env.local
 ```
 
-#### 필수 설정
+#### 필수 설정 (GitHub Secrets)
 
 | 변수명 | 설명 |
 |--------|------|
 | `SLACK_BOT_TOKEN` | Slack Bot OAuth 토큰 (`xoxb-xxxx`) |
 | `SLACK_SIGNING_SECRET` | Slack 요청 서명 검증용 시크릿 |
-| `AGENT_ID` | Bedrock Agent ID |
-| `AGENT_ALIAS_ID` | Bedrock Agent Alias ID |
+| `NOTION_TOKEN` | Notion Integration API 키 ([생성](https://www.notion.so/my-integrations)) |
+
+> `AGENT_ID`/`AGENT_ALIAS_ID`는 CloudFormation에서 자동 관리됩니다.
 
 #### 선택적 설정
 
@@ -137,9 +138,13 @@ aws bedrock-agent start-ingestion-job \
   --data-source-id <DS_ID>
 ```
 
+### Notion 문서 동기화
+
+GitHub Actions (`sync-notion.yml`)가 매일 Notion 페이지를 Markdown으로 내보내 Knowledge Base에 동기화합니다. 수동 실행도 가능합니다.
+
 ### CI/CD
 
-GitHub Actions (`.github/workflows/push.yml`)로 `main` 브랜치 푸시 시 자동 배포됩니다.
+GitHub Actions (`push.yml`)로 `main` 브랜치 푸시 시 자동 배포됩니다.
 
 ## 테스트
 

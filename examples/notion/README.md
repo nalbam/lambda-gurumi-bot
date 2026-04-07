@@ -1,19 +1,31 @@
-# Notion 예제
+# Notion Exporter
 
-## Install
+Notion 페이지를 Markdown으로 내보내는 스크립트입니다. 공식 Notion API를 사용합니다.
+
+## 설치
 
 ```bash
-$ brew install python@3.12
-
-$ python -m pip install --upgrade -r requirements.txt
+pip install -r requirements.txt
 ```
 
-## Test
+## 설정
+
+```bash
+cp .env.example .env
+# .env 파일에 Notion Integration API 토큰 입력
+```
+
+Notion Integration 생성: https://www.notion.so/my-integrations
+
+## 실행
 
 ```bash
 python notion_exporter.py
 ```
 
+`build/{NOTION_PAGE_NAME}/` 디렉토리에 Markdown 파일이 생성됩니다.
+
 ## References
 
-* <https://github.com/Strvm/python-notion-exporter>
+- https://github.com/indox-ai/notion-exporter
+- https://developers.notion.com/
