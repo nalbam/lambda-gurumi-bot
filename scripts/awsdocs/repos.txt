@@ -1,6 +1,0 @@
-# AWS Documentation repos to sync to Knowledge Base
-# Format: org/repo[:branch] (branch defaults to main)
-# Lines starting with # are ignored
-# Add or remove repos as needed
-
-awsdocs/amazon-eks-user-guide:mainline
