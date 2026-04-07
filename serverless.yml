@@ -175,8 +175,6 @@ resources:
         - S3VectorIndex
         - BedrockKBRole
       Properties:
-        Name:
-          Fn::Sub: ${self:provider.environment.BASE_NAME}-kb
         Description: Knowledge base for gurumi-ai-bot RAG
         RoleArn:
           Fn::GetAtt: [BedrockKBRole, Arn]
@@ -198,7 +196,6 @@ resources:
       Type: AWS::Bedrock::DataSource
       DependsOn: BedrockKnowledgeBase
       Properties:
-        Name: ${self:provider.environment.BASE_NAME}-datasource
         KnowledgeBaseId:
           Fn::GetAtt: [BedrockKnowledgeBase, KnowledgeBaseId]
         DataDeletionPolicy: RETAIN
