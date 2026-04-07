@@ -14,10 +14,12 @@ if __name__ == "__main__":
     if not NOTION_TOKEN:
         raise ValueError("NOTION_TOKEN environment variable is required")
 
-    exporter = NotionExporter(notion_token=NOTION_TOKEN)
+    exporter = NotionExporter(
+        notion_token=NOTION_TOKEN,
+        export_child_pages=True,
+    )
     exported_pages = exporter.export_pages(
         page_ids=[NOTION_PAGE_ID],
-        recursive=True,
     )
 
     output_dir = pathlib.Path("build") / NOTION_PAGE_NAME
