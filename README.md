@@ -138,9 +138,16 @@ aws bedrock-agent start-ingestion-job \
   --data-source-id <DS_ID>
 ```
 
-### Notion 문서 동기화
+### 문서 동기화
 
-GitHub Actions (`sync-notion.yml`)가 매일 Notion 페이지를 Markdown으로 내보내 Knowledge Base에 동기화합니다. 수동 실행도 가능합니다.
+두 가지 자동 동기화 워크플로우가 있으며, GitHub Variables로 활성화합니다.
+
+| 워크플로우 | 소스 | 활성화 변수 |
+|-----------|------|------------|
+| `sync-notion.yml` | Notion 페이지 → Markdown | `ENABLE_SYNC_NOTION=true` |
+| `sync-awsdocs.yml` | AWS 공식 PDF (19개 서비스) | `ENABLE_SYNC_AWSDOCS=true` |
+
+AWS 문서 목록은 `scripts/awsdocs/docs.txt`에서 관리합니다.
 
 ### CI/CD
 
