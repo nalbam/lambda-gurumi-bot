@@ -51,6 +51,55 @@
         "arn:aws:dynamodb:*:*:table/lambda-gurumi-ai-bot-*",
         "arn:aws:dynamodb:*:*:table/gurumi-ai-bot-*"
       ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3vectors:*"
+      ],
+      "Resource": [
+        "arn:aws:s3vectors:*:*:bucket/gurumi-ai-bot-*",
+        "arn:aws:s3vectors:*:*:bucket/gurumi-ai-bot-*/index/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:CreateKnowledgeBase",
+        "bedrock:DeleteKnowledgeBase",
+        "bedrock:GetKnowledgeBase",
+        "bedrock:UpdateKnowledgeBase",
+        "bedrock:TagResource",
+        "bedrock:UntagResource",
+        "bedrock:ListTagsForResource",
+        "bedrock:CreateDataSource",
+        "bedrock:DeleteDataSource",
+        "bedrock:GetDataSource",
+        "bedrock:UpdateDataSource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:AssociateAgentKnowledgeBase",
+        "bedrock:DisassociateAgentKnowledgeBase",
+        "bedrock:ListAgentKnowledgeBases",
+        "bedrock:PrepareAgent"
+      ],
+      "Resource": "arn:aws:bedrock:*:*:agent/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "iam:PassRole"
+      ],
+      "Resource": "arn:aws:iam::*:role/lambda-gurumi-ai-bot-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "bedrock.amazonaws.com"
+        }
+      }
     }
   ]
 }
