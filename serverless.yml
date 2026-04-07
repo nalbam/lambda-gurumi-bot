@@ -10,23 +10,20 @@ provider:
   timeout: 90
   environment:
     BASE_NAME: gurumi-ai-bot
-  iam:
-    role:
-      name: gurumi-ai-bot
-      statements:
-        - Effect: Allow
-          Action:
-            - dynamodb:GetItem
-            - dynamodb:PutItem
-            - dynamodb:Query
-          Resource:
-            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.BASE_NAME}-*"
-            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.BASE_NAME}-*/index/*"
-        - Effect: Allow
-          Action:
-            - bedrock:InvokeAgent
-          Resource:
-            - "arn:aws:bedrock:${self:provider.region}:*:agent-alias/*"
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:Query
+      Resource:
+        - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.BASE_NAME}-*"
+        - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.BASE_NAME}-*/index/*"
+    - Effect: Allow
+      Action:
+        - bedrock:InvokeAgent
+      Resource:
+        - "arn:aws:bedrock:${self:provider.region}:*:agent-alias/*"
 
 functions:
   mention:
