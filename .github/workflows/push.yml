@@ -98,8 +98,6 @@ jobs:
             --query "Stacks[0].Outputs[?OutputKey=='AgentAliasId'].OutputValue" \
             --output text)
 
-          aws bedrock-agent prepare-agent --agent-id "${AGENT_ID}" --region ${{ env.AWS_REGION }}
-          sleep 5
           aws bedrock-agent update-agent-alias \
             --agent-id "${AGENT_ID}" \
             --agent-alias-id "${ALIAS_ID}" \
