@@ -37,12 +37,6 @@ functions:
           method: post
           path: /slack/events
 
-  # kakao:
-  #   handler: handler.kakao_handler
-  #   events:
-  #     - http:
-  #         method: post
-  #         path: /kakao/events
 
 resources:
   Resources:
