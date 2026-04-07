@@ -433,6 +433,17 @@ def conversation(say: Say, query: str, thread_ts: Optional[str] = None,
     print(f"conversation: query: {query}, user_id: {user_id}")
 
     try:
+        # Set assistant thread status (shows animated indicator)
+        if thread_ts and channel:
+            try:
+                app.client.assistant_threads_setStatus(
+                    channel_id=channel,
+                    thread_ts=thread_ts,
+                    status="is thinking...",
+                )
+            except Exception as e:
+                print(f"Error setting thread status: {e}")
+
         # Send initial status message
         result = say(text=Config.BOT_CURSOR, thread_ts=thread_ts)
         latest_ts = result["ts"]
@@ -459,6 +470,17 @@ def conversation(say: Say, query: str, thread_ts: Optional[str] = None,
                 SlackManager.update_message(say, channel, thread_ts, latest_ts, MSG_ERROR)
         except Exception:
             pass
+    finally:
+        # Clear assistant thread status
+        if thread_ts and channel:
+            try:
+                app.client.assistant_threads_setStatus(
+                    channel_id=channel,
+                    thread_ts=thread_ts,
+                    status="",
+                )
+            except Exception:
+                pass
 
 
 @app.event("app_mention")
