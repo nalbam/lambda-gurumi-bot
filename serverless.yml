@@ -185,8 +185,6 @@ resources:
         StorageConfiguration:
           Type: S3_VECTORS
           S3VectorsConfiguration:
-            BucketArn:
-              Fn::GetAtt: [S3VectorBucket, VectorBucketArn]
             IndexArn:
               Fn::GetAtt: [S3VectorIndex, IndexArn]
         Tags:
