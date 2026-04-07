@@ -20,7 +20,7 @@ Notion Integration 생성: https://www.notion.so/my-integrations
 ## 실행
 
 ```bash
-python export_notion.py
+python export.py
 ```
 
 `build/{NOTION_PAGE_NAME}/` 디렉토리에 Markdown 파일이 생성됩니다.
