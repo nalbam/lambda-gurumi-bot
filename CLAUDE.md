@@ -86,7 +86,7 @@ Slack 이벤트 → lambda_handler → handle_mention/handle_message
 #### RAG 파이프라인
 
 ```
-S3 documents/ → BedrockDataSource (계층적 청킹: 1500/300 토큰, 60 오버랩)
+S3 documents/ → BedrockDataSource (고정 크기 청킹: 300 토큰, 20% 오버랩)
   → Titan Embeddings V2 (1024차원) → S3VectorIndex
   → Bedrock Agent가 자동으로 Knowledge Base 쿼리
 ```

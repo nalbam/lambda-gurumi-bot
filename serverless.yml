@@ -208,12 +208,10 @@ resources:
               - "documents/"
         VectorIngestionConfiguration:
           ChunkingConfiguration:
-            ChunkingStrategy: HIERARCHICAL
-            HierarchicalChunkingConfiguration:
-              LevelConfigurations:
-                - MaxTokens: 1500
-                - MaxTokens: 300
-              OverlapTokens: 60
+            ChunkingStrategy: FIXED_SIZE
+            FixedSizeChunkingConfiguration:
+              MaxTokens: 300
+              OverlapPercentage: 20
 
     # IAM Role for Bedrock Agent
     BedrockAgentRole:
