@@ -193,10 +193,21 @@
       "Sid": "BedrockAgent",
       "Effect": "Allow",
       "Action": [
+        "bedrock:CreateAgent",
+        "bedrock:UpdateAgent",
+        "bedrock:DeleteAgent",
+        "bedrock:GetAgent",
+        "bedrock:PrepareAgent",
+        "bedrock:CreateAgentAlias",
+        "bedrock:UpdateAgentAlias",
+        "bedrock:DeleteAgentAlias",
+        "bedrock:GetAgentAlias",
         "bedrock:AssociateAgentKnowledgeBase",
         "bedrock:DisassociateAgentKnowledgeBase",
         "bedrock:ListAgentKnowledgeBases",
-        "bedrock:PrepareAgent"
+        "bedrock:TagResource",
+        "bedrock:UntagResource",
+        "bedrock:ListTagsForResource"
       ],
       "Resource": "arn:aws:bedrock:*:*:agent/*"
     }

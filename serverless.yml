@@ -10,6 +10,10 @@ provider:
   timeout: 90
   environment:
     BASE_NAME: gurumi-ai-bot
+    AGENT_ID:
+      Fn::GetAtt: [BedrockAgent, AgentId]
+    AGENT_ALIAS_ID:
+      Fn::GetAtt: [BedrockAgentAlias, AgentAliasId]
   iamRoleStatements:
     - Effect: Allow
       Action:
@@ -215,6 +219,86 @@ resources:
                 - MaxTokens: 300
               OverlapTokens: 60
 
+    # IAM Role for Bedrock Agent
+    BedrockAgentRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName:
+          Fn::Sub: lambda-${self:provider.environment.BASE_NAME}-agent-role
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: bedrock.amazonaws.com
+              Action: sts:AssumeRole
+              Condition:
+                StringEquals:
+                  aws:SourceAccount:
+                    Ref: AWS::AccountId
+                ArnLike:
+                  aws:SourceArn:
+                    Fn::Sub: arn:aws:bedrock:${self:provider.region}:${AWS::AccountId}:agent/*
+        Policies:
+          - PolicyName: BedrockAgentPolicy
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Sid: InvokeModels
+                  Effect: Allow
+                  Action:
+                    - bedrock:InvokeModel
+                    - bedrock:InvokeModelWithResponseStream
+                  Resource:
+                    - Fn::Sub: arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0
+                    - Fn::Sub: arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+                - Sid: InferenceProfiles
+                  Effect: Allow
+                  Action:
+                    - bedrock:GetInferenceProfile
+                    - bedrock:GetFoundationModel
+                  Resource: "*"
+        Tags:
+          - Key: Project
+            Value: ${self:provider.environment.BASE_NAME}
+
+    # Bedrock Agent
+    BedrockAgent:
+      Type: AWS::Bedrock::Agent
+      DependsOn:
+        - BedrockAgentRole
+        - BedrockKnowledgeBase
+      Properties:
+        AgentName: ${self:provider.environment.BASE_NAME}
+        Description: AWSKRUG AI assistant gurumi
+        FoundationModel: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+        AgentResourceRoleArn:
+          Fn::GetAtt: [BedrockAgentRole, Arn]
+        Instruction: >-
+          You are a friendly and professional AI assistant.
+          If you don't know the answer, just say that you don't know, don't try to make up an answer.
+        IdleSessionTTLInSeconds: 600
+        AutoPrepare: true
+        KnowledgeBases:
+          - KnowledgeBaseId:
+              Fn::GetAtt: [BedrockKnowledgeBase, KnowledgeBaseId]
+            Description: RAG knowledge base for document retrieval
+            KnowledgeBaseState: ENABLED
+        Tags:
+          Project: ${self:provider.environment.BASE_NAME}
+
+    # Bedrock Agent Alias
+    BedrockAgentAlias:
+      Type: AWS::Bedrock::AgentAlias
+      DependsOn: BedrockAgent
+      Properties:
+        AgentId:
+          Fn::GetAtt: [BedrockAgent, AgentId]
+        AgentAliasName: live
+        Description: Production alias for gurumi agent
+        Tags:
+          Project: ${self:provider.environment.BASE_NAME}
+
   Outputs:
     KnowledgeBaseId:
       Value:
@@ -222,6 +306,12 @@ resources:
     DataSourceId:
       Value:
         Fn::GetAtt: [BedrockDataSource, DataSourceId]
+    AgentId:
+      Value:
+        Fn::GetAtt: [BedrockAgent, AgentId]
+    AgentAliasId:
+      Value:
+        Fn::GetAtt: [BedrockAgentAlias, AgentAliasId]
 
 plugins:
   - serverless-python-requirements

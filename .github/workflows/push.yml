@@ -14,8 +14,6 @@ env:
 
   STAGE: "dev"
 
-  AGENT_ALIAS_ID: ${{ vars.AGENT_ALIAS_ID }}
-  AGENT_ID: ${{ vars.AGENT_ID }}
   ALLOWED_CHANNEL_IDS: ${{ vars.ALLOWED_CHANNEL_IDS }}
   ALLOWED_CHANNEL_MESSAGE: ${{ vars.ALLOWED_CHANNEL_MESSAGE }}
   BOT_CURSOR: ${{ vars.BOT_CURSOR }}
@@ -66,8 +64,6 @@ jobs:
 
       - name: Set up environment variables 📝
         run: |
-          echo "AGENT_ALIAS_ID=${AGENT_ALIAS_ID}" >> .env
-          echo "AGENT_ID=${AGENT_ID}" >> .env
           echo "ALLOWED_CHANNEL_IDS=${ALLOWED_CHANNEL_IDS}" >> .env
           echo "ALLOWED_CHANNEL_MESSAGE=${ALLOWED_CHANNEL_MESSAGE}" >> .env
           echo "BOT_CURSOR=${BOT_CURSOR}" >> .env
@@ -92,34 +88,3 @@ jobs:
       - name: Deploy to AWS Lambda 🚀
         run: npx serverless deploy --stage ${{ env.STAGE }} --region ${{ env.AWS_REGION }}
 
-      - name: Associate Knowledge Base with Agent 🔗
-        run: |
-          KB_ID=$(aws cloudformation describe-stacks \
-            --stack-name lambda-gurumi-ai-bot-${{ env.STAGE }} \
-            --query "Stacks[0].Outputs[?OutputKey=='KnowledgeBaseId'].OutputValue" \
-            --output text)
-
-          if [ -z "$KB_ID" ] || [ "$KB_ID" = "None" ]; then
-            echo "Knowledge Base ID not found in stack outputs, skipping association"
-            exit 0
-          fi
-
-          EXISTING=$(aws bedrock-agent list-agent-knowledge-bases \
-            --agent-id ${{ env.AGENT_ID }} \
-            --agent-version DRAFT \
-            --query "agentKnowledgeBases[?knowledgeBaseId=='${KB_ID}'].knowledgeBaseId" \
-            --output text 2>/dev/null || true)
-
-          if [ -z "$EXISTING" ]; then
-            echo "Associating Knowledge Base ${KB_ID} with Agent ${{ env.AGENT_ID }}"
-            aws bedrock-agent associate-agent-knowledge-base \
-              --agent-id ${{ env.AGENT_ID }} \
-              --agent-version DRAFT \
-              --knowledge-base-id $KB_ID \
-              --description "RAG knowledge base for document retrieval" \
-              --knowledge-base-state ENABLED
-
-            aws bedrock-agent prepare-agent --agent-id ${{ env.AGENT_ID }}
-          else
-            echo "Knowledge Base ${KB_ID} already associated with Agent"
-          fi
