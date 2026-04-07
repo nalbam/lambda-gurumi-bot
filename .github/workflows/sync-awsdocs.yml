@@ -1,8 +1,8 @@
-name: Sync Notion to Knowledge Base
+name: Sync AWS Docs to Knowledge Base
 
 on:
   schedule:
-    - cron: "0 0 * * *" # Every day at 00:00 UTC
+    - cron: "0 1 * * *" # Every day at 01:00 UTC
   workflow_dispatch:
 
 env:
@@ -10,10 +10,7 @@ env:
   AWS_ROLE_NAME: "lambda-gurumi-ai-bot"
   STACK_NAME: "lambda-gurumi-ai-bot-dev"
 
-  ENABLE_SYNC_NOTION: ${{ vars.ENABLE_SYNC_NOTION }}
-
-  NOTION_PAGE_NAME: "nalbam"
-  NOTION_PAGE_ID: "7aace0412a82431996f61a29225a95ec"
+  ENABLE_SYNC_AWSDOCS: ${{ vars.ENABLE_SYNC_AWSDOCS }}
 
   AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
 
@@ -23,34 +20,21 @@ permissions:
 
 jobs:
   sync:
-    if: ${{ vars.ENABLE_SYNC_NOTION == 'true' }}
+    if: ${{ vars.ENABLE_SYNC_AWSDOCS == 'true' }}
     runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout 🛎️
         uses: actions/checkout@v4
 
-      - name: Setup Python 3.12 🐍
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: pip install notion-exporter
-
-      - name: Export Notion pages to Markdown
-        env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-        run: python scripts/notion/export.py
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: "arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/${{ env.AWS_ROLE_NAME }}"
-          role-session-name: github-actions-sync-notion
+          role-session-name: github-actions-sync-awsdocs
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Get S3 bucket name from CloudFormation
+      - name: Get stack outputs
         id: stack
         run: |
           BUCKET=$(aws cloudformation describe-stack-resource \
@@ -72,11 +56,8 @@ jobs:
             --output text)
           echo "ds_id=${DS_ID}" >> "$GITHUB_OUTPUT"
 
-      - name: Sync documents to S3
-        run: |
-          aws s3 sync --delete \
-            build/${{ env.NOTION_PAGE_NAME }}/ \
-            s3://${{ steps.stack.outputs.bucket }}/documents/${{ env.NOTION_PAGE_NAME }}/
+      - name: Sync AWS docs to S3
+        run: ./scripts/awsdocs/sync.sh ${{ steps.stack.outputs.bucket }}
 
       - name: Start Knowledge Base ingestion
         run: |
