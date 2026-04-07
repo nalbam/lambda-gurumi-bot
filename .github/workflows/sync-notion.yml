@@ -38,7 +38,7 @@ jobs:
       - name: Export Notion pages to Markdown
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-        run: python examples/notion/export.py
+        run: python scripts/notion/export.py
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4

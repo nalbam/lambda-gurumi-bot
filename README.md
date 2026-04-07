@@ -156,7 +156,7 @@ curl -X POST \
   https://your-api-url/dev/slack/events
 
 # Bedrock Agent 직접 테스트
-cd examples/bedrock
+cd scripts/bedrock
 python invoke_agent.py -p "프롬프트 입력"
 python invoke_knowledge_base.py -p "지식 베이스 쿼리"
 ```

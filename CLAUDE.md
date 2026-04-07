@@ -12,7 +12,7 @@ sls deploy --region us-east-1
 sls remove --region us-east-1
 
 # Bedrock 테스트
-cd examples/bedrock && python invoke_agent.py -p "프롬프트"
+cd scripts/bedrock && python invoke_agent.py -p "프롬프트"
 ```
 
 ## 코드 구조
