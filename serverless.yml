@@ -100,7 +100,6 @@ resources:
       Properties:
         VectorBucketName:
           Fn::Sub: ${self:provider.environment.BASE_NAME}-vectors-${AWS::AccountId}
-        IndexName: ${self:provider.environment.BASE_NAME}-index
         DataType: float32
         Dimension: 1024
         DistanceMetric: cosine
