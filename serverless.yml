@@ -252,6 +252,12 @@ resources:
                     - bedrock:GetInferenceProfile
                     - bedrock:GetFoundationModel
                   Resource: "*"
+                - Sid: KnowledgeBaseRetrieve
+                  Effect: Allow
+                  Action:
+                    - bedrock:Retrieve
+                  Resource:
+                    Fn::GetAtt: [BedrockKnowledgeBase, KnowledgeBaseArn]
         Tags:
           - Key: Project
             Value: ${self:provider.environment.BASE_NAME}
