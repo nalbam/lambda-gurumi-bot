@@ -30,7 +30,10 @@
       "Action": [
         "iam:*"
       ],
-      "Resource": "arn:aws:iam::*:role/lambda-gurumi-ai-bot-*"
+      "Resource": [
+        "arn:aws:iam::*:role/lambda-gurumi-ai-bot-*",
+        "arn:aws:iam::*:role/gurumi-ai-bot"
+      ]
     },
     {
       "Effect": "Allow",
