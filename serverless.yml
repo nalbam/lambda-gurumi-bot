@@ -8,6 +8,8 @@ provider:
   architecture: arm64
   memorySize: 5120
   timeout: 90
+  environment:
+    BASE_NAME: gurumi-ai-bot
   iam:
     role:
       name: gurumi-ai-bot
@@ -25,8 +27,6 @@ provider:
             - bedrock:InvokeAgent
           Resource:
             - "arn:aws:bedrock:${self:provider.region}:*:agent-alias/*"
-  environment:
-    BASE_NAME: gurumi-ai-bot
 
 functions:
   mention:
