@@ -1,11 +1,6 @@
 # AWS Documentation repos to sync to Knowledge Base
-# Format: org/repo (branch defaults to main)
+# Format: org/repo[:branch] (branch defaults to main)
 # Lines starting with # are ignored
 # Add or remove repos as needed
 
-awsdocs/amazon-dynamodb-developer-guide
-awsdocs/amazon-eks-user-guide
-awsdocs/amazon-rds-user-guide
-awsdocs/amazon-s3-userguide
-awsdocs/aws-lambda-developer-guide
-awsdocs/iam-user-guide
+awsdocs/amazon-eks-user-guide:mainline
