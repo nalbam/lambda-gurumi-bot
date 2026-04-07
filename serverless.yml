@@ -46,6 +46,7 @@ functions:
 
 resources:
   Resources:
+    # DynamoDB Table for conversation history and metadata
     DynamoDBTable:
       Type: AWS::DynamoDB::Table
       Properties:
@@ -78,6 +79,7 @@ resources:
           - Key: Project
             Value: ${self:provider.environment.BASE_NAME}
 
+    # S3 Bucket for original documents
     S3Bucket:
       Type: AWS::S3::Bucket
       Properties:
