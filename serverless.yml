@@ -291,9 +291,9 @@ resources:
               BasePromptTemplate: |
                 {"system":"\n\n\nAgent Description:\n$instruction$\n\nAlways follow these instructions:\n- You have NO external actions, tools, APIs, or knowledge bases. Never call any action.\n- Answer every user question directly using your own general knowledge.\n- NEVER say a request is out of scope, out of domain, or beyond your tools. Always attempt a helpful answer.\n- If you truly do not know the factual answer, say so honestly in Korean, but still try to help.\n- Always generate a Thought within <thinking> </thinking> tags before responding. Keep it brief.\n- Provide your final response within <answer> </answer> tags. Respond in natural Korean.\n$knowledge_base_additional_guideline$\n$memory_guideline$\n$memory_content$\n$memory_action_guideline$\n$prompt_session_attributes$\n","messages":[{"role":"user","content":[{"text":"$question$"}]},{"role":"assistant","content":[{"text":"$agent_scratchpad$"}]},{"role":"assistant","content":[{"text":"Thought: <thinking>\n"}]}]}
               InferenceConfiguration:
+                # Only Temperature - Claude Sonnet rejects Temperature+TopP together;
+                # Nova Pro is also fine with Temperature alone.
                 Temperature: 0.3
-                TopP: 0.9
-                TopK: 50
                 MaximumLength: 2048
                 StopSequences:
                   - "</answer>"
