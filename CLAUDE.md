@@ -1,164 +1,160 @@
 # CLAUDE.md
 
-이 파일은 Claude Code가 이 저장소의 코드를 수정할 때 참고하는 개발 가이드입니다.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 주요 명령어
+## Commands
 
 ```bash
-# 배포
-sls deploy --region us-east-1
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+cp .env.example .env.local   # fill in values
 
-# 배포 제거
-sls remove --region us-east-1
+# Local CLI runner (no Slack connection needed; streaming is default)
+python localtest.py "질문"
+python localtest.py --no-stream "질문"   # wait for full answer, then print
+python localtest.py --quiet-steps "질문" # hide intermediate step logs
+python localtest.py                       # interactive stdin (Ctrl+D)
 
-# Bedrock 테스트
-cd scripts/bedrock && python invoke_agent.py -p "프롬프트"
+# Tests
+python -m pytest
+python -m pytest --cov=src --cov-report=term-missing
+python -m pytest tests/test_agent.py::test_agent_runs_tool_then_returns_text -v
+
+# Deploy (requires IAM OIDC role `lambda-gurumi-bot`)
+npm i -g serverless@3
+npm i serverless-python-requirements
+# export SLACK_BOT_TOKEN / SLACK_SIGNING_SECRET / OPENAI_API_KEY / ... first
+serverless deploy --stage dev --region us-east-1
 ```
 
-## 코드 구조
+Lambda entrypoint: `app.lambda_handler`. Slack events land at `POST /slack/events` via API Gateway.
 
-### handler.py - 단일 파일 구조
+## Core agent pipeline — DO NOT bypass or shortcut
 
-모든 핵심 로직이 `handler.py`에 포함되어 있습니다.
-
-#### 클래스
-
-| 클래스 | 역할 | 주요 메서드 |
-|--------|------|------------|
-| `Config` | 환경 변수 기반 설정 (16개 항목) | `validate()`, `get_reaction_emojis()` |
-| `DynamoDBManager` | 컨텍스트 저장/조회, 중복 감지, 쓰로틀링 | `put_context()`, `get_context()`, `count_user_contexts()` |
-| `MessageFormatter` | 응답 분할 (코드 블록, 문단, 문장 단위) | `split_message()` |
-| `SlackManager` | 메시지 업데이트, 스레드 히스토리 조회 | `update_message()`, `get_thread_history()` |
-| `BedrockManager` | Agent 호출, 프롬프트 구성 | `invoke_agent()`, `create_prompt()` |
-
-#### 핸들러/함수
-
-| 함수 | 트리거 | 설명 |
-|------|--------|------|
-| `lambda_handler` | HTTP POST `/slack/events` | Slack 이벤트 진입점 |
-| `handle_mention` | `app_mention` 이벤트 | 앱 멘션 처리 |
-| `handle_message` | `message` 이벤트 | 다이렉트 메시지 처리 |
-| `handle_reaction_added` | `reaction_added` 이벤트 | 이모지 리액션 처리 |
-| `conversation` | 내부 호출 | AI 응답 생성 및 전송 |
-| `process_refund_done` | `:refund-done:` 리액션 | 계좌번호 마스킹, 환불일시 추가 |
-
-#### 데이터 흐름
+Every user turn flows through the same four phases, in order:
 
 ```
-Slack 이벤트 → lambda_handler → handle_mention/handle_message
-  → 중복 감지 (client_msg_id, DynamoDB)
-  → 쓰로틀링 체크 (MAX_THROTTLE_COUNT)
-  → conversation()
-    → SlackManager.get_thread_history() → 대화 컨텍스트 수집
-    → BedrockManager.create_prompt() → 프롬프트 구성
-      - PERSONAL_MESSAGE (페르소나)
-      - SYSTEM_MESSAGE (시스템 지시)
-      - <history> 태그 (대화 기록)
-      - <question> 태그 (현재 질문)
-    → BedrockManager.invoke_agent() → Bedrock Agent 호출
-      - Agent가 Knowledge Base를 자동으로 쿼리 (RAG)
-    → MessageFormatter.split_message() → 응답 분할 (MAX_LEN_SLACK)
-    → SlackManager.update_message() → Slack 전송
+질문 (user message)
+  ↓
+의도·계획 (intent + plan — one LLM hop; native function calling emits
+           tool_calls in the same response when tools are needed)
+  ↓
+툴 사용 (tool execution — repeats as the LLM keeps calling tools)
+  ↓
+응답 (compose the final answer once the LLM stops requesting tools)
 ```
 
-### serverless.yml - AWS 리소스
+"의도 파악" and "계획" are a single step in code: one call to
+`LLMProvider.chat(..., tools=registry.specs())`. The LLM's response
+carries both the interpretation of the user request AND the proposed
+tool_calls (if any) in one shot. Do NOT split this into a separate
+intent-classifier hop — that adds a full LLM roundtrip for no gain
+and diverges from native function-calling semantics.
 
-#### CloudFormation 리소스
+**Design rules — invariants for future changes:**
 
-| 리소스 | 타입 | 이름 패턴 |
-|--------|------|-----------|
-| DynamoDBTable | `AWS::DynamoDB::Table` | `gurumi-ai-bot-{stage}` |
-| S3Bucket | `AWS::S3::Bucket` | `gurumi-ai-bot-{account-id}` |
-| S3VectorBucket | `AWS::S3Vectors::VectorBucket` | `gurumi-ai-bot-vectors-{account-id}` |
-| S3VectorIndex | `AWS::S3Vectors::Index` | `gurumi-ai-bot-index` (1024dim, cosine, float32) |
-| BedrockKBRole | `AWS::IAM::Role` | `lambda-gurumi-ai-bot-kb-role` |
-| BedrockKnowledgeBase | `AWS::Bedrock::KnowledgeBase` | `gurumi-ai-bot-kb` |
-| BedrockDataSource | `AWS::Bedrock::DataSource` | `gurumi-ai-bot-datasource` |
-| BedrockAgentRole | `AWS::IAM::Role` | `lambda-gurumi-ai-bot-agent-role` |
-| BedrockAgent | `AWS::Bedrock::Agent` | `gurumi-ai-bot` (Claude Sonnet 4.5, KB 연결 포함) |
-| BedrockAgentAlias | `AWS::Bedrock::AgentAlias` | `live` |
+1. **Intent is always an LLM decision.** Never use keyword heuristics
+   (e.g., `"그려"`/`"draw"` → image generator) to bypass the agent.
+   The LLM reads the message and emits `tool_calls` to reflect intent.
+2. **No phase shortcuts.** Even for "obvious" image requests, we still
+   go through the full hop: LLM plan → `generate_image` tool_call → tool
+   execution → LLM compose. Skipping the compose step to save seconds
+   means the bot can't caption, follow up, or react to tool errors.
+3. **Tool orchestration happens inside the agent loop**, not in
+   `app.py`. `app.py` wires Slack concerns (placeholder, streaming,
+   history). `src/agent.py` owns the loop. Don't push intent
+   detection out of the agent.
+4. **Slowness is a streaming / infrastructure problem, not a
+   pipeline-shortcut problem.** If the loop is slow, fix it with
+   async invocation, model choice, or streaming UX — not by
+   stripping phases.
 
-#### Lambda IAM 권한 (iamRoleStatements)
+If a future change is tempted to add a keyword or rule-based intent
+branch "just for images", the answer is no: route it through the
+agent like everything else.
 
-- `dynamodb:GetItem/PutItem/Query` → `gurumi-ai-bot-*` 테이블
-- `bedrock:InvokeAgent` → `agent-alias/*`
+## Architecture — the non-obvious parts
 
-#### RAG 파이프라인
+### Agent loop uses NATIVE function calling, not JSON prompting
 
-```
-S3 documents/ → BedrockDataSource (고정 크기 청킹: 300 토큰, 20% 오버랩)
-  → Titan Embeddings V2 (1024차원) → S3VectorIndex
-  → Bedrock Agent가 자동으로 Knowledge Base 쿼리
-```
+`src/agent.py` passes `registry.specs()` directly to `LLMProvider.chat(tools=...)`. The provider (`src/llm.py`) translates that to OpenAI `tools=[{type:"function",function:{...}}]` or Bedrock `tools=[{name, description, input_schema}]` (Claude) / `toolConfig` (Nova). There is **no JSON-in-prompt parsing** — tool calls arrive as structured objects. Loop terminates when `stop_reason != "tool_use"` or `max_steps` hit. On max_steps, a forced compose step (`_compose_without_tools`) runs with `tools=None`.
 
-#### Outputs
+Duplicate tool-call suppression: `_call_signature` = `name + sha1(args_json)`. A repeated signature within the loop is short-circuited with `{"ok": False, "error": "duplicate call skipped"}` and handed back to the LLM so it can move on.
 
-- `KnowledgeBaseId` - Bedrock Knowledge Base ID
-- `DataSourceId` - Bedrock Data Source ID
-- `AgentId` - Bedrock Agent ID
-- `AgentAliasId` - Bedrock Agent Alias ID
+### Three LLM provider families, one Protocol
 
-### .github/workflows/ - CI/CD
+`LLMProvider` is a Protocol implemented by `OpenAIProvider`, `XAIProvider`, and `BedrockProvider`. OpenAI and xAI share the OpenAI wire format, so they both extend `_OpenAICompatProvider` and reuse the module-level helpers (`_to_openai_wire_messages`, `_parse_openai_completion`, `_consume_openai_stream`) rather than duplicating stream/tool_calls handling.
 
-#### push.yml - 인프라 배포
+- **OpenAIProvider**: default OpenAI endpoint. `_token_params` switches between `max_tokens` (legacy chat) and `max_completion_tokens` (gpt-5 / o1 / o3 / o4 reasoning).
+- **XAIProvider**: `base_url="https://api.x.ai/v1"`, explicit `api_key`. Grok chat models accept the legacy `max_tokens + temperature` combo, so we never use `max_completion_tokens` here. Image generation omits `size` (xAI uses `aspect_ratio` / `resolution`) and always requests `response_format="b64_json"` so we can decode bytes locally.
+- **BedrockProvider**: routes internally on model family prefix (Bedrock IDs and their `us./eu./apac./global.` inference-profile variants are both accepted):
+  - `anthropic.claude*` → `invoke_model` with Messages API shape, `content[].type=="tool_use"` parsing.
+  - `amazon.nova*` → `converse` / `converse_stream` with `toolConfig` + `output.message.content[].toolUse`.
+  - Unknown → Claude path without tools.
 
-`main` 브랜치 푸시 시 자동 실행:
-1. Python 3.12 + 의존성 설치
-2. GitHub Variables(비민감) / Secrets(민감)에서 `.env` 생성
-3. AWS OIDC 인증 (역할: `lambda-gurumi-ai-bot`)
-4. `serverless deploy` (Lambda, DynamoDB, S3, S3 Vectors, KB, Agent 전체 배포)
+`_to_anthropic_messages` / `_to_nova_messages` translate our canonical role/tool_calls/tool messages to each backend's shape. `tool` role becomes an Anthropic `tool_result` content block inside a user message; Nova becomes a `toolResult` content block.
 
-#### sync-notion.yml - Notion 문서 동기화
+Image generation is family-routed too: Titan/Nova-Canvas use `TEXT_IMAGE` task; Stability uses `text_prompts`. See `_build_image_body`.
 
-매일 UTC 00:00 스케줄 + 수동 실행(`workflow_dispatch`):
-1. Notion 페이지를 Markdown으로 내보내기 (`notion-exporter`, 공식 Notion API)
-2. S3 `documents/{page_name}/` 프리픽스로 동기화 (`aws s3 sync --delete`)
-3. Knowledge Base Ingestion 실행 (문서 → 임베딩 → S3 Vectors)
-4. KB/DS ID는 CloudFormation Output에서 자동 조회
-5. GitHub Secrets: `NOTION_TOKEN` (Notion Integration API 키)
-6. 활성화: GitHub Variables `ENABLE_SYNC_NOTION=true`
+`_CompositeProvider` wraps two providers when text and image providers differ (e.g., OpenAI text + Bedrock image).
 
-#### sync-awsdocs.yml - AWS 공식 문서 동기화
+### Slack retry → DynamoDB conditional put dedup
 
-매일 UTC 01:00 스케줄 + 수동 실행(`workflow_dispatch`):
-1. `scripts/awsdocs/docs.txt`에 정의된 AWS 공식 PDF 다운로드 (19개 서비스)
-2. 50MB 초과 PDF는 `qpdf`로 100페이지 단위 자동 분할
-3. S3 `documents/{service}/` 프리픽스로 동기화
-4. Knowledge Base Ingestion 실행
-5. 활성화: GitHub Variables `ENABLE_SYNC_AWSDOCS=true`
-6. 문서 추가/제거: `scripts/awsdocs/docs.txt` 편집
+`lambda_handler` short-circuits when `X-Slack-Retry-Num` header is present (returns 200 OK). Even without the retry header, the first line of `_process()` is `DedupStore.reserve(f"dedup:{client_msg_id}")` which does `put_item(ConditionExpression="attribute_not_exists(id)")`. Duplicate key raises `ConditionalCheckFailedException` → False → silent return. This is the only race-safe dedup (get-then-put has a window). TTL 1h via `expire_at`.
 
-### .github/aws-role/role-policy.json - 배포 IAM 정책
+### Single table, two key prefixes
 
-배포 역할의 최소 권한 정책. 서비스별 필요 액션만 포함:
-- CloudFormation, Lambda, IAM, S3, DynamoDB, API Gateway, CloudWatch Logs
-- S3 Vectors, Bedrock (Knowledge Base, Data Source, Agent)
+`DYNAMODB_TABLE_NAME` stores both dedup reservations (`dedup:{msg_id}`) and thread conversation memory (`ctx:{thread_ts}`). GSI `user-index` (hash `user`, range `expire_at`) backs per-user throttle via `count_user_active(user)`. `ConversationStore.put` trims with `truncate_to_chars(messages, max_chars)` (drop oldest until serialized size fits).
 
-## 환경 변수
+### Message splitting is code-fence-aware
 
-| 변수명 | 기본값 | 용도 |
-|--------|--------|------|
-| `SLACK_BOT_TOKEN` | (필수) | Slack Bot OAuth 토큰 |
-| `SLACK_SIGNING_SECRET` | (필수) | 요청 서명 검증 |
-| `AGENT_ID` | (CF 자동) | Bedrock Agent ID (CloudFormation `Fn::GetAtt` 참조) |
-| `AGENT_ALIAS_ID` | (CF 자동) | Bedrock Agent Alias ID (CloudFormation `Fn::GetAtt` 참조) |
-| `DYNAMODB_TABLE_NAME` | `gurumi-ai-bot-dev` | DynamoDB 테이블명 |
-| `AWS_REGION` | `us-east-1` | AWS 리전 |
-| `ALLOWED_CHANNEL_IDS` | `None` | 허용 채널 (쉼표 구분, None=전체 허용) |
-| `ALLOWED_CHANNEL_MESSAGE` | 영문 메시지 | 비허용 채널 응답 메시지 |
-| `PERSONAL_MESSAGE` | `You are a friendly and professional AI assistant.` | 페르소나 프롬프트 |
-| `SYSTEM_MESSAGE` | `None` | 시스템 지시사항 |
-| `MAX_LEN_SLACK` | `2000` | Slack 메시지 분할 길이 |
-| `MAX_LEN_BEDROCK` | `4000` | Bedrock 컨텍스트 최대 길이 |
-| `MAX_THROTTLE_COUNT` | `100` | 사용자별 동시 활성 컨텍스트 수 제한 |
-| `SLACK_SAY_INTERVAL` | `0` | 분할 메시지 전송 간격 (초) |
-| `BOT_CURSOR` | `:robot_face:` | 로딩 표시 이모지 |
-| `REACTION_EMOJIS` | `refund-done` | 허용 이모지 리액션 (쉼표 구분) |
+`MessageFormatter.split_message` (in `src/slack_helpers.py`) splits on `\`\`\`` first (so complete code blocks survive), then on `\n\n`, then on `.!?` sentence boundaries, then hard slice. `_merge_small` rejoins adjacent small chunks up to `max_len`. First chunk goes via `chat_update` on the placeholder message; the rest via `chat_postMessage(thread_ts=…)`. If `chat_update` fails (`msg_too_long` etc.), that chunk falls back to a new message.
 
-## 코드 수정 시 주의사항
+### Config is lazy, not import-time
 
-- `handler.py`는 단일 파일 구조. 800줄 이상 시 클래스 단위 분리 검토
-- `serverless.yml`의 리소스 이름 패턴(`gurumi-ai-bot-*`, `lambda-gurumi-ai-bot-*`)은 `role-policy.json`의 IAM 리소스 패턴과 일치해야 함
-- Bedrock Agent는 CloudFormation으로 관리 (`AWS::Bedrock::Agent`). `AGENT_ID`/`AGENT_ALIAS_ID`는 `Fn::GetAtt` 참조
-- Knowledge Base는 Agent에 연결되므로 `handler.py`에서 직접 Retrieve API를 호출하지 않음
-- DynamoDB TTL은 `expire_at` (Unix timestamp) 속성 사용, 1시간 기본
+`Settings.from_env()` runs at module load but does NOT validate Slack credentials. `Settings.require_slack_credentials()` is called from `_get_bolt_app()` so the first request fails cleanly but tests and tooling can import `app` without `SLACK_BOT_TOKEN`. The old `RuntimeError` at module top is gone.
+
+Enum/int validation quietly falls back to defaults with a warning: invalid `LLM_PROVIDER=mystery` → `openai`, `AGENT_MAX_STEPS=not-int` → `3`, below-minimum values clamp up.
+
+### Streaming runs on every LLM hop
+
+`OpenAIProvider.chat(on_delta=...)` switches into `stream=True` and forwards content deltas as they arrive. When the model starts a `tool_calls` delta (preamble like "Let me search..."), forwarding is suppressed — that pre-tool commentary would leak into the final reply. Tool_calls are accumulated across chunks and returned alongside the content. The agent passes `self.on_stream` into every `chat()` call, so when the LLM decides to answer directly (no tools) the user sees tokens immediately. A separate `stream_chat()` path still exists for the forced compose at `max_steps` and for Bedrock paths that don't yet support tool+stream natively.
+
+Stream throttling is handled inside `StreamingMessage.append()` (`min_interval=0.6s`), not by a wrapper in `app.py`. `StreamingMessage` also rolls into a fresh `chat_postMessage` when the fallback buffer approaches `max_len`, and `stop()` splits an oversized final answer using `MessageFormatter` so no single update hits Slack's `msg_too_long` error.
+
+### Structured logging with request_id
+
+`src/logging_utils.py` installs a JSON handler on root. `set_request_id(uuid)` is called at the start of each `_process`. `log_event(logger, "agent.done", steps=..., tokens_in=...)` emits records whose `extra_fields` dict survives into the JSON payload — useful for CloudWatch Insights queries. Because `logging.LoggerAdapter.process()` in Python 3.12 overwrites `extra=`, `log_event` dispatches via `logger.logger` (the underlying `Logger`) instead of the adapter.
+
+## Deployment
+
+`serverless.yml` provisions:
+- Lambda: python3.12, x86_64, 5120MB, 90s timeout. (x86_64 matches the Ubuntu GitHub Actions runner so pip installs wheels — including native ones like `pydantic_core` — that run on the Lambda runtime. Switching to arm64 requires a Docker-based build path via serverless-python-requirements and is deferred.)
+- DynamoDB: hash `id`, GSI `user-index` (user + expire_at, KEYS_ONLY), TTL `expire_at`.
+- IAM: `dynamodb:GetItem/PutItem/Query` on table + GSI, `bedrock:InvokeModel*`/`Converse*`.
+
+`.github/workflows/push-main.yml` runs pytest (with coverage), then `configure-aws-credentials` OIDC → `serverless deploy`. Secrets and Variables split described in README.
+
+## Testing
+
+Coverage target 80%+, currently 86% overall. Key approach:
+- `moto[dynamodb]` for `DedupStore` / `ConversationStore` integration tests.
+- `responses` / `unittest.mock.patch("src.tools.urllib.request.urlopen")` for web tools.
+- `ScriptedLLM` (see `tests/test_agent.py`) emits predefined `LLMResult` sequences to drive loop scenarios without any network.
+- Provider tests use `MagicMock` clients (no real OpenAI / Bedrock calls).
+- `tests/test_config.py` builds `Settings` from `monkeypatch`-controlled env without reloading the module.
+
+## Things that are easy to break
+
+- **Dropping the `_CompositeProvider` branch** in `get_llm` breaks mixed-provider setups (OpenAI text + Bedrock image).
+- **Changing `DedupStore.reserve` to a read-then-write pattern** reintroduces the retry race.
+- **Losing the `id` prefix scheme** (`dedup:` vs `ctx:`) collides the two store types.
+- **Switching to `LoggerAdapter.info(extra=…)`** — in Python 3.12 the adapter's `process()` overwrites `extra`; keep going through `logger.logger` for `extra_fields`.
+- **Removing the SSRF host allowlist** (`SLACK_FILE_HOSTS`) shared by `read_attached_images` and `read_attached_document` (`_fetch_slack_file`) opens up arbitrary URL fetch with the bot token.
+- **Adding a tool without updating `ToolRegistry.specs()`** — the `@tool` decorator handles both dispatch and LLM schema from a single declaration; inline dict tricks will silently desync.
+
+## Excluded (Phase 2+)
+
+- Bedrock Knowledge Base (S3 Vectors + RAG) ingestion pipeline
+- `reaction_added` event wiring + domain-specific handlers (refund masking, etc.)
+- CloudWatch Alarms / X-Ray / multi-language prompts beyond ko/en

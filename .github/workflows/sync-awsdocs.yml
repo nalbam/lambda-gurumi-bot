@@ -7,8 +7,8 @@ on:
 
 env:
   AWS_REGION: "us-east-1"
-  AWS_ROLE_NAME: "lambda-gurumi-ai-bot"
-  STACK_NAME: "lambda-gurumi-ai-bot-dev"
+  AWS_ROLE_NAME: "lambda-gurumi-bot"
+  STACK_NAME: "lambda-gurumi-bot-dev"
 
   ENABLE_SYNC_AWSDOCS: ${{ vars.ENABLE_SYNC_AWSDOCS }}
 

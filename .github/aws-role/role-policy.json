@@ -26,7 +26,7 @@
         "cloudformation:DeleteChangeSet",
         "cloudformation:DescribeChangeSet"
       ],
-      "Resource": "arn:aws:cloudformation:*:*:stack/lambda-gurumi-ai-bot-*"
+      "Resource": "arn:aws:cloudformation:*:*:stack/lambda-gurumi-bot-*"
     },
     {
       "Sid": "Lambda",
@@ -47,7 +47,7 @@
         "lambda:ListTags"
       ],
       "Resource": [
-        "arn:aws:lambda:*:*:function:lambda-gurumi-ai-bot-*"
+        "arn:aws:lambda:*:*:function:lambda-gurumi-bot-*"
       ]
     },
     {
@@ -65,7 +65,7 @@
         "iam:UntagRole",
         "iam:ListRoleTags"
       ],
-      "Resource": "arn:aws:iam::*:role/lambda-gurumi-ai-bot-*"
+      "Resource": "arn:aws:iam::*:role/lambda-gurumi-bot-*"
     },
     {
       "Sid": "S3",
@@ -89,8 +89,8 @@
         "s3:DeleteObject"
       ],
       "Resource": [
-        "arn:aws:s3:::lambda-gurumi-ai-bot-*",
-        "arn:aws:s3:::lambda-gurumi-ai-bot-*/*",
+        "arn:aws:s3:::lambda-gurumi-bot-*",
+        "arn:aws:s3:::lambda-gurumi-bot-*/*",
         "arn:aws:s3:::gurumi-ai-bot-*",
         "arn:aws:s3:::gurumi-ai-bot-*/*"
       ]
@@ -141,7 +141,7 @@
         "logs:UntagResource",
         "logs:ListTagsForResource"
       ],
-      "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/lambda-gurumi-ai-bot-*"
+      "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/lambda-gurumi-bot-*"
     },
     {
       "Sid": "S3Vectors",

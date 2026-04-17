@@ -1,54 +1,98 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/lalcebo/json-schema/master/serverless/reference.json
-service: lambda-gurumi-ai-bot
+service: lambda-gurumi-bot
+frameworkVersion: "3"
+
 provider:
   name: aws
-  region: us-east-1
   runtime: python3.12
+  # Keep arch aligned with the GitHub Actions Ubuntu runner so pip installs
+  # wheels that match the Lambda runtime (pydantic_core, etc.). Switching
+  # back to arm64 needs a Docker-based build (serverless-python-requirements
+  # dockerizePip) or a cross-platform wheel flag — deferred.
+  architecture: x86_64
+  region: ${env:AWS_REGION, 'us-east-1'}
   stage: ${opt:stage, 'dev'}
-  architecture: arm64
   memorySize: 5120
   timeout: 90
   environment:
-    BASE_NAME: gurumi-ai-bot
-    FOUNDATION_MODEL: ${env:FOUNDATION_MODEL, 'amazon.nova-lite-v1:0'}
-    AGENT_ID:
-      Fn::GetAtt: [BedrockAgent, AgentId]
-    AGENT_ALIAS_ID:
-      Fn::GetAtt: [BedrockAgentAlias, AgentAliasId]
-  iamRoleStatements:
-    - Effect: Allow
-      Action:
-        - dynamodb:GetItem
-        - dynamodb:PutItem
-        - dynamodb:Query
-      Resource:
-        - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.BASE_NAME}-*"
-        - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.BASE_NAME}-*/index/*"
-    - Effect: Allow
-      Action:
-        - bedrock:InvokeAgent
-      Resource:
-        - "arn:aws:bedrock:${self:provider.region}:*:agent-alias/*"
+    DYNAMODB_TABLE_NAME: ${self:service}-${sls:stage}
+    AWS_REGION_NAME: ${self:provider.region}
+    LLM_PROVIDER: ${env:LLM_PROVIDER, 'openai'}
+    LLM_MODEL: ${env:LLM_MODEL, 'gpt-4o-mini'}
+    IMAGE_PROVIDER: ${env:IMAGE_PROVIDER, 'openai'}
+    IMAGE_MODEL: ${env:IMAGE_MODEL, 'gpt-image-1'}
+    RESPONSE_LANGUAGE: ${env:RESPONSE_LANGUAGE, 'ko'}
+    AGENT_MAX_STEPS: ${env:AGENT_MAX_STEPS, '3'}
+    MAX_OUTPUT_TOKENS: ${env:MAX_OUTPUT_TOKENS, '4096'}
+    MAX_LEN_SLACK: ${env:MAX_LEN_SLACK, '3000'}
+    MAX_THROTTLE_COUNT: ${env:MAX_THROTTLE_COUNT, '100'}
+    MAX_HISTORY_CHARS: ${env:MAX_HISTORY_CHARS, '4000'}
+    BOT_CURSOR: ${env:BOT_CURSOR, ':robot_face:'}
+    ALLOWED_CHANNEL_IDS: ${env:ALLOWED_CHANNEL_IDS, ''}
+    ALLOWED_CHANNEL_MESSAGE: ${env:ALLOWED_CHANNEL_MESSAGE, ''}
+    SYSTEM_MESSAGE: ${env:SYSTEM_MESSAGE, ''}
+    LOG_LEVEL: ${env:LOG_LEVEL, 'INFO'}
+    DEFAULT_TIMEZONE: ${env:DEFAULT_TIMEZONE, 'Asia/Seoul'}
+    MAX_DOC_CHARS: ${env:MAX_DOC_CHARS, '20000'}
+    MAX_DOC_PAGES: ${env:MAX_DOC_PAGES, '50'}
+    MAX_DOC_BYTES: ${env:MAX_DOC_BYTES, '26214400'}
+    SLACK_BOT_TOKEN: ${env:SLACK_BOT_TOKEN}
+    SLACK_SIGNING_SECRET: ${env:SLACK_SIGNING_SECRET}
+    OPENAI_API_KEY: ${env:OPENAI_API_KEY, ''}
+    XAI_API_KEY: ${env:XAI_API_KEY, ''}
+    TAVILY_API_KEY: ${env:TAVILY_API_KEY, ''}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:Query
+          Resource:
+            - !GetAtt ConversationTable.Arn
+            - !Join ["", [!GetAtt ConversationTable.Arn, "/index/user-index"]]
+        - Effect: Allow
+          Action:
+            - bedrock:InvokeModel
+            - bedrock:InvokeModelWithResponseStream
+            - bedrock:Converse
+            - bedrock:ConverseStream
+          Resource: "*"
+
+plugins:
+  - serverless-python-requirements
+
+custom:
+  pythonRequirements:
+    slim: true
+    layer: false
+    noDeploy:
+      - pytest
+      - pytest-cov
+      - moto
+      - responses
 
 functions:
   mention:
-    handler: handler.lambda_handler
+    handler: app.lambda_handler
     events:
       - http:
+          path: slack/events
           method: post
-          path: /slack/events
 
 resources:
   Resources:
-    DynamoDBTable:
+    ConversationTable:
       Type: AWS::DynamoDB::Table
       Properties:
-        TableName: ${self:provider.environment.BASE_NAME}-${self:provider.stage}
+        TableName: ${self:service}-${sls:stage}
         AttributeDefinitions:
           - AttributeName: id
             AttributeType: S
           - AttributeName: user
             AttributeType: S
+          - AttributeName: expire_at
+            AttributeType: N
         KeySchema:
           - AttributeName: id
             KeyType: HASH
@@ -57,282 +101,16 @@ resources:
             KeySchema:
               - AttributeName: user
                 KeyType: HASH
+              - AttributeName: expire_at
+                KeyType: RANGE
             Projection:
               ProjectionType: KEYS_ONLY
             ProvisionedThroughput:
               ReadCapacityUnits: 5
               WriteCapacityUnits: 5
-        ProvisionedThroughput:
-          ReadCapacityUnits: 5
-          WriteCapacityUnits: 5
         TimeToLiveSpecification:
           AttributeName: expire_at
           Enabled: true
-        Tags:
-          - Key: Project
-            Value: ${self:provider.environment.BASE_NAME}
-
-    S3Bucket:
-      Type: AWS::S3::Bucket
-      Properties:
-        BucketName:
-          Fn::Sub: ${self:provider.environment.BASE_NAME}-${AWS::AccountId}
-        Tags:
-          - Key: Project
-            Value: ${self:provider.environment.BASE_NAME}
-
-    # --- RAG: S3 Vectors + Knowledge Base (uncomment to enable) ---
-
-    # S3VectorBucket:
-    #   Type: AWS::S3Vectors::VectorBucket
-    #   Properties:
-    #     VectorBucketName:
-    #       Fn::Sub: ${self:provider.environment.BASE_NAME}-vectors-${AWS::AccountId}
-    #     Tags:
-    #       - Key: Project
-    #         Value: ${self:provider.environment.BASE_NAME}
-
-    # S3VectorIndex:
-    #   Type: AWS::S3Vectors::Index
-    #   DependsOn: S3VectorBucket
-    #   Properties:
-    #     VectorBucketName:
-    #       Fn::Sub: ${self:provider.environment.BASE_NAME}-vectors-${AWS::AccountId}
-    #     DataType: float32
-    #     Dimension: 1024
-    #     DistanceMetric: cosine
-    #     MetadataConfiguration:
-    #       NonFilterableMetadataKeys:
-    #         - AMAZON_BEDROCK_TEXT
-    #         - AMAZON_BEDROCK_METADATA
-    #     Tags:
-    #       - Key: Project
-    #         Value: ${self:provider.environment.BASE_NAME}
-
-    # BedrockKBRole:
-    #   Type: AWS::IAM::Role
-    #   Properties:
-    #     RoleName:
-    #       Fn::Sub: lambda-${self:provider.environment.BASE_NAME}-kb-role
-    #     AssumeRolePolicyDocument:
-    #       Version: "2012-10-17"
-    #       Statement:
-    #         - Effect: Allow
-    #           Principal:
-    #             Service: bedrock.amazonaws.com
-    #           Action: sts:AssumeRole
-    #           Condition:
-    #             StringEquals:
-    #               aws:SourceAccount:
-    #                 Ref: AWS::AccountId
-    #     Policies:
-    #       - PolicyName: BedrockKBPolicy
-    #         PolicyDocument:
-    #           Version: "2012-10-17"
-    #           Statement:
-    #             - Sid: S3VectorsAccess
-    #               Effect: Allow
-    #               Action:
-    #                 - s3vectors:PutVectors
-    #                 - s3vectors:GetVectors
-    #                 - s3vectors:DeleteVectors
-    #                 - s3vectors:QueryVectors
-    #                 - s3vectors:GetIndex
-    #               Resource:
-    #                 Fn::GetAtt: [S3VectorIndex, IndexArn]
-    #             - Sid: S3ListBucket
-    #               Effect: Allow
-    #               Action:
-    #                 - s3:ListBucket
-    #               Resource:
-    #                 Fn::GetAtt: [S3Bucket, Arn]
-    #             - Sid: S3GetObject
-    #               Effect: Allow
-    #               Action:
-    #                 - s3:GetObject
-    #               Resource:
-    #                 Fn::Sub:
-    #                   - "${BucketArn}/*"
-    #                   - BucketArn:
-    #                       Fn::GetAtt: [S3Bucket, Arn]
-    #             - Sid: BedrockInvokeModel
-    #               Effect: Allow
-    #               Action:
-    #                 - bedrock:InvokeModel
-    #               Resource:
-    #                 Fn::Sub: arn:aws:bedrock:${self:provider.region}::foundation-model/amazon.titan-embed-text-v2:0
-    #     Tags:
-    #       - Key: Project
-    #         Value: ${self:provider.environment.BASE_NAME}
-
-    # BedrockKnowledgeBase:
-    #   Type: AWS::Bedrock::KnowledgeBase
-    #   DependsOn:
-    #     - S3VectorIndex
-    #     - BedrockKBRole
-    #   Properties:
-    #     Name:
-    #       Fn::Sub: ${self:provider.environment.BASE_NAME}-kb
-    #     Description: Knowledge base for gurumi-ai-bot RAG
-    #     RoleArn:
-    #       Fn::GetAtt: [BedrockKBRole, Arn]
-    #     KnowledgeBaseConfiguration:
-    #       Type: VECTOR
-    #       VectorKnowledgeBaseConfiguration:
-    #         EmbeddingModelArn:
-    #           Fn::Sub: arn:aws:bedrock:${self:provider.region}::foundation-model/amazon.titan-embed-text-v2:0
-    #     StorageConfiguration:
-    #       Type: S3_VECTORS
-    #       S3VectorsConfiguration:
-    #         IndexArn:
-    #           Fn::GetAtt: [S3VectorIndex, IndexArn]
-    #     Tags:
-    #       Project: ${self:provider.environment.BASE_NAME}
-
-    # BedrockDataSource:
-    #   Type: AWS::Bedrock::DataSource
-    #   DependsOn: BedrockKnowledgeBase
-    #   Properties:
-    #     Name: ${self:provider.environment.BASE_NAME}-datasource
-    #     KnowledgeBaseId:
-    #       Fn::GetAtt: [BedrockKnowledgeBase, KnowledgeBaseId]
-    #     DataDeletionPolicy: RETAIN
-    #     DataSourceConfiguration:
-    #       Type: S3
-    #       S3Configuration:
-    #         BucketArn:
-    #           Fn::GetAtt: [S3Bucket, Arn]
-    #         InclusionPrefixes:
-    #           - "documents/"
-    #     VectorIngestionConfiguration:
-    #       ChunkingConfiguration:
-    #         ChunkingStrategy: FIXED_SIZE
-    #         FixedSizeChunkingConfiguration:
-    #           MaxTokens: 300
-    #           OverlapPercentage: 20
-
-    # --- End RAG ---
-
-    BedrockAgentRole:
-      Type: AWS::IAM::Role
-      Properties:
-        RoleName:
-          Fn::Sub: lambda-${self:provider.environment.BASE_NAME}-agent-role
-        AssumeRolePolicyDocument:
-          Version: "2012-10-17"
-          Statement:
-            - Effect: Allow
-              Principal:
-                Service: bedrock.amazonaws.com
-              Action: sts:AssumeRole
-              Condition:
-                StringEquals:
-                  aws:SourceAccount:
-                    Ref: AWS::AccountId
-                ArnLike:
-                  aws:SourceArn:
-                    Fn::Sub: arn:aws:bedrock:${self:provider.region}:${AWS::AccountId}:agent/*
-        Policies:
-          - PolicyName: BedrockAgentPolicy
-            PolicyDocument:
-              Version: "2012-10-17"
-              Statement:
-                - Sid: InvokeModels
-                  Effect: Allow
-                  Action:
-                    - bedrock:InvokeModel
-                    - bedrock:InvokeModelWithResponseStream
-                  Resource:
-                    - "arn:aws:bedrock:*::foundation-model/*"
-                    - Fn::Sub: arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*
-                - Sid: InferenceProfiles
-                  Effect: Allow
-                  Action:
-                    - bedrock:GetFoundationModel
-                    - bedrock:GetInferenceProfile
-                  Resource: "*"
-                # --- RAG: uncomment when Knowledge Base is enabled ---
-                # - Sid: KnowledgeBaseRetrieve
-                #   Effect: Allow
-                #   Action:
-                #     - bedrock:Retrieve
-                #   Resource:
-                #     Fn::GetAtt: [BedrockKnowledgeBase, KnowledgeBaseArn]
-        Tags:
-          - Key: Project
-            Value: ${self:provider.environment.BASE_NAME}
-
-    BedrockAgent:
-      Type: AWS::Bedrock::Agent
-      DependsOn:
-        - BedrockAgentRole
-        # - BedrockKnowledgeBase  # uncomment when KB is enabled
-      Properties:
-        AgentName: ${self:provider.environment.BASE_NAME}
-        Description: AWSKRUG AI assistant gurumi
-        FoundationModel: ${self:provider.environment.FOUNDATION_MODEL}
-        AgentResourceRoleArn:
-          Fn::GetAtt: [BedrockAgentRole, Arn]
-        Instruction: >-
-          You are Gurumi (구루미), the friendly and professional AI assistant of AWSKRUG (AWS Korea User Group).
-          Answer every user question directly using your own general knowledge.
-          You have no external tools, APIs, or knowledge bases available; never claim a request is out of scope,
-          out of domain, or beyond your tools - always attempt a helpful answer from your internal knowledge.
-          If you truly do not know something, say so honestly. Respond in natural, easy-to-understand Korean.
-        IdleSessionTTLInSeconds: 600
-        AutoPrepare: true
-        # Override default ORCHESTRATION template to remove outOfDomain refusal behavior
-        # (Nova Pro with no actions/KB refuses everything under the default template).
-        PromptOverrideConfiguration:
-          PromptConfigurations:
-            - PromptType: ORCHESTRATION
-              PromptCreationMode: OVERRIDDEN
-              PromptState: ENABLED
-              BasePromptTemplate: |
-                {"system":"\n\n\nAgent Description:\n$instruction$\n\nAlways follow these instructions:\n- You have NO external actions, tools, APIs, or knowledge bases. Never call any action.\n- Answer every user question directly using your own general knowledge.\n- NEVER say a request is out of scope, out of domain, or beyond your tools. Always attempt a helpful answer.\n- If you truly do not know the factual answer, say so honestly in Korean, but still try to help.\n- Always generate a Thought within <thinking> </thinking> tags before responding. Keep it brief.\n- Provide your final response within <answer> </answer> tags. Respond in natural Korean.\n$knowledge_base_additional_guideline$\n$memory_guideline$\n$memory_content$\n$memory_action_guideline$\n$prompt_session_attributes$\n","messages":[{"role":"user","content":[{"text":"$question$"}]},{"role":"assistant","content":[{"text":"$agent_scratchpad$"}]},{"role":"assistant","content":[{"text":"Thought: <thinking>\n"}]}]}
-              InferenceConfiguration:
-                # Only Temperature - Claude Sonnet rejects Temperature+TopP together;
-                # Nova Pro is also fine with Temperature alone.
-                Temperature: 0.3
-                MaximumLength: 2048
-                StopSequences:
-                  - "</answer>"
-              ParserMode: DEFAULT
-        # --- RAG: uncomment when Knowledge Base is enabled ---
-        # KnowledgeBases:
-        #   - KnowledgeBaseId:
-        #       Fn::GetAtt: [BedrockKnowledgeBase, KnowledgeBaseId]
-        #     Description: RAG knowledge base for document retrieval
-        #     KnowledgeBaseState: ENABLED
-        Tags:
-          Project: ${self:provider.environment.BASE_NAME}
-
-    BedrockAgentAlias:
-      Type: AWS::Bedrock::AgentAlias
-      DependsOn: BedrockAgent
-      Properties:
-        AgentId:
-          Fn::GetAtt: [BedrockAgent, AgentId]
-        AgentAliasName: live
-        Description: Production alias for gurumi agent
-        Tags:
-          Project: ${self:provider.environment.BASE_NAME}
-
-  Outputs:
-    AgentId:
-      Value:
-        Fn::GetAtt: [BedrockAgent, AgentId]
-    AgentAliasId:
-      Value:
-        Fn::GetAtt: [BedrockAgentAlias, AgentAliasId]
-    # --- RAG: uncomment when Knowledge Base is enabled ---
-    # KnowledgeBaseId:
-    #   Value:
-    #     Fn::GetAtt: [BedrockKnowledgeBase, KnowledgeBaseId]
-    # DataSourceId:
-    #   Value:
-    #     Fn::GetAtt: [BedrockDataSource, DataSourceId]
-
-plugins:
-  - serverless-python-requirements
-  - serverless-dotenv-plugin
+        ProvisionedThroughput:
+          ReadCapacityUnits: 5
+          WriteCapacityUnits: 5
