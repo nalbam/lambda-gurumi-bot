@@ -118,8 +118,6 @@ export ACCOUNT_ID=$(aws sts get-caller-identity | jq -r .Account)
 aws iam attach-role-policy --role-name "${NAME}" --policy-arn "arn:aws:iam::${ACCOUNT_ID}:policy/${NAME}"
 ```
 
-`trust-policy.json` 은 `awskrug/lambda-gurumi-bot` 과 `nalbam/lambda-gurumi-bot` repo 의 OIDC 토큰을, `role-policy.json` 은 CloudFormation · Lambda · IAM · S3 · DynamoDB · API Gateway · CloudWatch Logs · S3 Vectors · Bedrock (KnowledgeBase / DataSource / Agent) 권한을 `lambda-gurumi-bot-*` 스코프로 포함합니다.
-
 ### 2. GitHub 저장소 설정
 
 - **Secrets**: `AWS_ACCOUNT_ID`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `OPENAI_API_KEY`, `XAI_API_KEY`(xAI 사용 시), `TAVILY_API_KEY`(선택)
