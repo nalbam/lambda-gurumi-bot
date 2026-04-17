@@ -69,10 +69,6 @@ and diverges from native function-calling semantics.
    async invocation, model choice, or streaming UX — not by
    stripping phases.
 
-If a future change is tempted to add a keyword or rule-based intent
-branch "just for images", the answer is no: route it through the
-agent like everything else.
-
 ## Architecture — the non-obvious parts
 
 ### Agent loop uses NATIVE function calling, not JSON prompting
@@ -112,7 +108,7 @@ Image generation is family-routed too: Titan/Nova-Canvas use `TEXT_IMAGE` task; 
 
 ### Config is lazy, not import-time
 
-`Settings.from_env()` runs at module load but does NOT validate Slack credentials. `Settings.require_slack_credentials()` is called from `_get_bolt_app()` so the first request fails cleanly but tests and tooling can import `app` without `SLACK_BOT_TOKEN`. The old `RuntimeError` at module top is gone.
+`Settings.from_env()` runs at module load but does NOT validate Slack credentials. `Settings.require_slack_credentials()` is called from `_get_bolt_app()` so the first request fails cleanly, but tests and tooling can import `app` without `SLACK_BOT_TOKEN`.
 
 Enum/int validation quietly falls back to defaults with a warning: invalid `LLM_PROVIDER=mystery` → `openai`, `AGENT_MAX_STEPS=not-int` → `3`, below-minimum values clamp up.
 
@@ -131,18 +127,31 @@ Stream throttling is handled inside `StreamingMessage.append()` (`min_interval=0
 `serverless.yml` provisions:
 - Lambda: python3.12, x86_64, 5120MB, 90s timeout. (x86_64 matches the Ubuntu GitHub Actions runner so pip installs wheels — including native ones like `pydantic_core` — that run on the Lambda runtime. Switching to arm64 requires a Docker-based build path via serverless-python-requirements and is deferred.)
 - DynamoDB: hash `id`, GSI `user-index` (user + expire_at, KEYS_ONLY), TTL `expire_at`.
-- IAM: `dynamodb:GetItem/PutItem/Query` on table + GSI, `bedrock:InvokeModel*`/`Converse*`.
+- IAM (runtime Lambda role): `dynamodb:GetItem/PutItem/Query` on table + GSI, `bedrock:InvokeModel*`/`Converse*`.
 
-`.github/workflows/push-main.yml` runs pytest (with coverage), then `configure-aws-credentials` OIDC → `serverless deploy`. Secrets and Variables split described in README.
+### GitHub Actions workflows
+
+Three files under `.github/workflows/`:
+
+- `push.yml` — on `push` to `main` (and `workflow_dispatch`). Runs `pytest --cov=src`, sets up Node 20 + Serverless v3, assumes the OIDC role `lambda-gurumi-bot`, then `serverless deploy --stage dev --region us-east-1`.
+- `sync-notion.yml`, `sync-awsdocs.yml` — `workflow_dispatch` only (schedule commented out), each gated by `vars.ENABLE_SYNC_NOTION` / `ENABLE_SYNC_AWSDOCS`. Both call `aws cloudformation describe-stacks` expecting outputs `S3Bucket` / `KnowledgeBaseId` / `DataSourceId` that `serverless.yml` does not define, and invoke ingestion scripts (`scripts/notion/export.py`, `scripts/awsdocs/sync.sh`) that have been deleted. **They fail if enabled.** See "Excluded (Phase 2+)".
+
+### OIDC role (`.github/aws-role/`)
+
+Separate from the Lambda runtime role. `trust-policy.json` allows both `repo:awskrug/lambda-gurumi-bot:*` and `repo:nalbam/lambda-gurumi-bot:*`. `role-policy.json` is intentionally wider than current needs — it already grants `s3vectors:*`, `bedrock:*KnowledgeBase*`, `bedrock:*DataSource*`, `bedrock:*Agent*` (scoped to `lambda-gurumi-bot-*`) so Phase-2 KB work can land without IAM changes.
 
 ## Testing
 
-Coverage target 80%+, currently 86% overall. Key approach:
+125 tests, 86% overall coverage. `pytest.ini` pins `testpaths = tests`, `filterwarnings = ignore::DeprecationWarning`. Key approach:
+
 - `moto[dynamodb]` for `DedupStore` / `ConversationStore` integration tests.
 - `responses` / `unittest.mock.patch("src.tools.urllib.request.urlopen")` for web tools.
-- `ScriptedLLM` (see `tests/test_agent.py`) emits predefined `LLMResult` sequences to drive loop scenarios without any network.
-- Provider tests use `MagicMock` clients (no real OpenAI / Bedrock calls).
+- `ScriptedLLM` (in `tests/test_agent.py`) emits predefined `LLMResult` sequences to drive the agent loop without any network.
+- Provider tests use `MagicMock` clients — no real OpenAI / Bedrock / xAI calls.
 - `tests/test_config.py` builds `Settings` from `monkeypatch`-controlled env without reloading the module.
+- `reportlab` (dev-only) synthesizes real PDFs for `read_attached_document` parser coverage.
+
+Per-module coverage: `agent.py` 96%, `config.py` 98%, `tools.py` 90%, `llm.py` 84%, `slack_helpers.py` 83%, `dedup.py` 78%, `logging_utils.py` 68%.
 
 ## Things that are easy to break
 
@@ -155,6 +164,6 @@ Coverage target 80%+, currently 86% overall. Key approach:
 
 ## Excluded (Phase 2+)
 
-- Bedrock Knowledge Base (S3 Vectors + RAG) ingestion pipeline
-- `reaction_added` event wiring + domain-specific handlers (refund masking, etc.)
-- CloudWatch Alarms / X-Ray / multi-language prompts beyond ko/en
+- **Bedrock Knowledge Base (S3 Vectors + RAG) ingestion pipeline.** Scaffolding exists (IAM policy + `sync-notion.yml` / `sync-awsdocs.yml`), but `serverless.yml` does not provision `S3Bucket` / `KnowledgeBase` / `DataSource`, and the ingestion scripts (`scripts/notion/export.py`, `scripts/awsdocs/sync.sh`) were removed. Both must be restored to re-enable the workflows.
+- `reaction_added` event wiring and domain-specific handlers.
+- CloudWatch Alarms, X-Ray tracing, languages other than `ko` / `en`.
