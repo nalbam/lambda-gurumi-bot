@@ -2,6 +2,8 @@
 
 Slack 멘션·DM 을 AWS Lambda 에서 처리하고, OpenAI · AWS Bedrock · xAI(Grok) LLM 으로 네이티브 **function calling** 기반 툴 오케스트레이션을 수행하는 봇입니다.
 
+![Gurumi Bot](images/gurumi-bot.png)
+
 ## 봇의 처리 흐름 (절대 생략하지 않는다)
 
 모든 사용자 메시지는 다음 네 단계를 **순서대로** 통과합니다:
