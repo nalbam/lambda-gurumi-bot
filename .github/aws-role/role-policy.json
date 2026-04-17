@@ -90,9 +90,7 @@
       ],
       "Resource": [
         "arn:aws:s3:::lambda-gurumi-bot-*",
-        "arn:aws:s3:::lambda-gurumi-bot-*/*",
-        "arn:aws:s3:::gurumi-ai-bot-*",
-        "arn:aws:s3:::gurumi-ai-bot-*/*"
+        "arn:aws:s3:::lambda-gurumi-bot-*/*"
       ]
     },
     {
@@ -110,7 +108,7 @@
         "dynamodb:ListTagsOfResource"
       ],
       "Resource": [
-        "arn:aws:dynamodb:*:*:table/gurumi-ai-bot-*"
+        "arn:aws:dynamodb:*:*:table/lambda-gurumi-bot-*"
       ]
     },
     {
@@ -160,8 +158,8 @@
         "s3vectors:ListTagsForResource"
       ],
       "Resource": [
-        "arn:aws:s3vectors:*:*:bucket/gurumi-ai-bot-*",
-        "arn:aws:s3vectors:*:*:bucket/gurumi-ai-bot-*/index/*"
+        "arn:aws:s3vectors:*:*:bucket/lambda-gurumi-bot-*",
+        "arn:aws:s3vectors:*:*:bucket/lambda-gurumi-bot-*/index/*"
       ]
     },
     {
