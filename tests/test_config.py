@@ -149,8 +149,6 @@ def test_default_timezone_custom_value(monkeypatch, reload_config):
 
 def test_web_fetch_defaults(monkeypatch, reload_config):
     _clear_env(monkeypatch)
-    for key in ["MAX_WEB_CHARS", "MAX_WEB_BYTES", "MAX_WEB_LINKS", "JINA_READER_BASE"]:
-        monkeypatch.delenv(key, raising=False)
     s = reload_config()
     assert s.max_web_chars == 8000
     assert s.max_web_bytes == 2 * 1024 * 1024
