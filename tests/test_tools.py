@@ -773,7 +773,7 @@ def test_validate_public_https_url_rejects_private_dns(monkeypatch):
         # Simulate DNS pointing at RFC1918 space.
         return [(None, None, None, "", ("10.0.0.1", port))]
 
-    monkeypatch.setattr("src.tools.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("src.tools_web.socket.getaddrinfo", fake_getaddrinfo)
     with pytest.raises(ValueError, match="non-public"):
         _validate_public_https_url("https://internal.corp.example/")
 
@@ -784,7 +784,7 @@ def test_validate_public_https_url_rejects_metadata_host(monkeypatch):
     def fake_getaddrinfo(host, port, family=0, type=0, *args, **kwargs):
         return [(None, None, None, "", ("169.254.169.254", port))]
 
-    monkeypatch.setattr("src.tools.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("src.tools_web.socket.getaddrinfo", fake_getaddrinfo)
     with pytest.raises(ValueError, match="non-public"):
         _validate_public_https_url("https://cloud.metadata.example/")
 
@@ -795,7 +795,7 @@ def test_validate_public_https_url_accepts_public_host(monkeypatch):
     def fake_getaddrinfo(host, port, family=0, type=0, *args, **kwargs):
         return [(None, None, None, "", ("93.184.216.34", port))]  # example.com
 
-    monkeypatch.setattr("src.tools.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("src.tools_web.socket.getaddrinfo", fake_getaddrinfo)
     scheme, host = _validate_public_https_url("https://example.com/path")
     assert scheme == "https"
     assert host == "example.com"
@@ -809,7 +809,7 @@ def test_validate_public_https_url_dns_failure(monkeypatch):
     def fake_getaddrinfo(host, port, family=0, type=0, *args, **kwargs):
         raise _socket.gaierror("nodename nor servname provided")
 
-    monkeypatch.setattr("src.tools.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("src.tools_web.socket.getaddrinfo", fake_getaddrinfo)
     with pytest.raises(ValueError, match="DNS resolution failed"):
         _validate_public_https_url("https://nonexistent.invalid.example/")
 
@@ -1017,7 +1017,7 @@ def test_jina_fetch_returns_body_under_cap():
     from src.tools import _jina_fetch
 
     payload = b"Title: x\nURL Source: https://example.com/\n\nBody here."
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools_web.urllib.request.urlopen") as opener:
         resp = opener.return_value.__enter__.return_value
         resp.headers = {"Content-Length": str(len(payload)), "Content-Type": "text/markdown"}
         resp.read.side_effect = _streamed_read(payload)
@@ -1028,7 +1028,7 @@ def test_jina_fetch_returns_body_under_cap():
 def test_jina_fetch_content_length_over_cap():
     from src.tools import _jina_fetch
 
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools_web.urllib.request.urlopen") as opener:
         resp = opener.return_value.__enter__.return_value
         resp.headers = {"Content-Length": "999999"}
         resp.read.side_effect = _streamed_read(b"x" * 10)
@@ -1040,7 +1040,7 @@ def test_jina_fetch_streamed_over_cap():
     from src.tools import _jina_fetch
 
     body = b"x" * 2000
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools_web.urllib.request.urlopen") as opener:
         resp = opener.return_value.__enter__.return_value
         resp.headers = {}  # no Content-Length
         resp.read.side_effect = _streamed_read(body)
@@ -1059,7 +1059,7 @@ def test_raw_fetch_returns_body_under_cap(monkeypatch):
     cm = fake_opener.open.return_value.__enter__.return_value
     cm.headers = {"Content-Length": str(len(body)), "Content-Type": "text/html"}
     cm.read.side_effect = _streamed_read(body)
-    monkeypatch.setattr("src.tools.urllib.request.build_opener", lambda *_: fake_opener)
+    monkeypatch.setattr("src.tools_web.urllib.request.build_opener", lambda *_: fake_opener)
 
     html = _raw_fetch("https://example.com/", max_bytes=1024)
     assert "hello" in html
@@ -1073,6 +1073,6 @@ def test_raw_fetch_streamed_over_cap(monkeypatch):
     cm = fake_opener.open.return_value.__enter__.return_value
     cm.headers = {}
     cm.read.side_effect = _streamed_read(body)
-    monkeypatch.setattr("src.tools.urllib.request.build_opener", lambda *_: fake_opener)
+    monkeypatch.setattr("src.tools_web.urllib.request.build_opener", lambda *_: fake_opener)
     with pytest.raises(ValueError, match="MAX_WEB_BYTES"):
         _raw_fetch("https://example.com/", max_bytes=1024)
