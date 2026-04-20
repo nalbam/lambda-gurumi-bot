@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -510,6 +511,117 @@ def search_web(ctx: ToolContext, query: str, limit: int = 5) -> list[dict[str, s
     if ctx.settings.tavily_api_key:
         return _tavily_search(ctx.settings.tavily_api_key, query, limit)
     return _ddg_search(query, limit)
+
+
+@tool(
+    default_registry,
+    name="fetch_webpage",
+    description=(
+        "Fetch a public HTTPS web page and return clean text content plus a "
+        "list of outbound links. Use this for summarizing articles, landing "
+        "pages, or news indexes. For Slack-hosted files use "
+        "read_attached_document / read_attached_images instead."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "Absolute https URL of the page to fetch.",
+            },
+            "max_chars": {
+                "type": "integer",
+                "minimum": 500,
+                "maximum": 20000,
+                "description": "Optional cap on returned content characters. Clamped by MAX_WEB_CHARS.",
+            },
+            "max_links": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 50,
+                "description": "Optional cap on returned link count. Clamped by MAX_WEB_LINKS.",
+            },
+        },
+        "required": ["url"],
+    },
+    timeout=30.0,
+)
+def fetch_webpage(
+    ctx: ToolContext,
+    url: str,
+    max_chars: int | None = None,
+    max_links: int | None = None,
+) -> dict[str, Any]:
+    _validate_public_https_url(url)
+    settings = ctx.settings
+    effective_chars = min(
+        max_chars if max_chars is not None else settings.max_web_chars,
+        settings.max_web_chars,
+    )
+    effective_links = min(
+        max_links if max_links is not None else settings.max_web_links,
+        settings.max_web_links,
+    )
+
+    title = ""
+    content = ""
+    links: list[dict[str, str]] = []
+    source = "raw"
+    jina_err: str | None = None
+
+    try:
+        jina_text = _jina_fetch(settings.jina_reader_base, url, settings.max_web_bytes)
+        parsed_title, body = _parse_jina_response(jina_text)
+        if body.strip():
+            title = parsed_title
+            content = body
+            links = _extract_markdown_links(body, url, effective_links)
+            source = "jina"
+        else:
+            jina_err = "empty body"
+    except (
+        ValueError,
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        socket.timeout,
+        UnicodeDecodeError,
+    ) as exc:
+        jina_err = f"{exc.__class__.__name__}: {exc}"
+        logger.info("fetch_webpage jina fallback: %s", jina_err)
+
+    if source != "jina":
+        _validate_public_https_url(url)
+        try:
+            html_text = _raw_fetch(url, settings.max_web_bytes)
+        except (
+            ValueError,
+            urllib.error.URLError,
+            urllib.error.HTTPError,
+            socket.timeout,
+        ) as exc:
+            raise ValueError(
+                f"fetch_webpage failed: jina={jina_err}, raw={exc.__class__.__name__}: {exc}"
+            ) from exc
+        extractor = _HtmlTextExtractor(url)
+        extractor.feed(html_text)
+        title = extractor.title() or title
+        content = extractor.text()
+        links = _filter_links(extractor.links, url, effective_links)
+
+    truncated = False
+    if len(content) > effective_chars:
+        content = content[:effective_chars]
+        truncated = True
+
+    return {
+        "url": url,
+        "title": title,
+        "content": content,
+        "links": links,
+        "chars": len(content),
+        "truncated": truncated,
+        "source": source,
+    }
 
 
 @tool(

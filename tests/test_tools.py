@@ -1076,3 +1076,184 @@ def test_raw_fetch_streamed_over_cap(monkeypatch):
     monkeypatch.setattr("src.tools_web.urllib.request.build_opener", lambda *_: fake_opener)
     with pytest.raises(ValueError, match="MAX_WEB_BYTES"):
         _raw_fetch("https://example.com/", max_bytes=1024)
+
+
+# --------------------------------------------------------------------------- #
+# fetch_webpage — end-to-end via tool function
+# --------------------------------------------------------------------------- #
+
+
+def _public_dns(monkeypatch):
+    """Route all src.tools_web.socket.getaddrinfo lookups to a public IP."""
+
+    def _public(host, port, family=0, type=0, *args, **kwargs):
+        return [(None, None, None, "", ("93.184.216.34", port))]
+
+    monkeypatch.setattr("src.tools_web.socket.getaddrinfo", _public)
+
+
+def test_default_registry_now_includes_fetch_webpage():
+    names = set(default_registry.names())
+    assert "fetch_webpage" in names
+
+
+def test_fetch_webpage_rejects_http_via_tool(monkeypatch):
+    from src.tools import fetch_webpage
+
+    ctx = _ctx()
+    with pytest.raises(ValueError, match="https"):
+        fetch_webpage(ctx, url="http://example.com/")
+
+
+def test_fetch_webpage_jina_happy_path(monkeypatch):
+    from src.tools import fetch_webpage
+
+    _public_dns(monkeypatch)
+    jina_body = (
+        b"Title: Example Page\n"
+        b"URL Source: https://example.com/\n"
+        b"Markdown Content:\n"
+        b"# Hello\n\nSee [Docs](https://docs.example.com/) and [Blog](https://blog.example.com/).\n"
+    )
+    ctx = _ctx()
+    with patch("src.tools_web.urllib.request.urlopen") as opener:
+        resp = opener.return_value.__enter__.return_value
+        resp.headers = {"Content-Length": str(len(jina_body))}
+        resp.read.side_effect = _streamed_read(jina_body)
+        out = fetch_webpage(ctx, url="https://example.com/")
+    assert out["source"] == "jina"
+    assert out["title"] == "Example Page"
+    assert "Hello" in out["content"]
+    urls = [link["url"] for link in out["links"]]
+    assert "https://docs.example.com/" in urls
+    assert "https://blog.example.com/" in urls
+    assert out["truncated"] is False
+    assert out["chars"] == len(out["content"])
+
+
+def test_fetch_webpage_falls_back_to_raw_on_jina_5xx(monkeypatch):
+    from src.tools import fetch_webpage
+    import urllib.error
+
+    _public_dns(monkeypatch)
+    html_body = (
+        b"<html><head><title>Raw Title</title></head>"
+        b"<body><p>Raw body.</p>"
+        b"<a href='https://docs.example.com/'>Docs</a></body></html>"
+    )
+
+    def jina_fail(*args, **kwargs):
+        raise urllib.error.HTTPError(
+            "https://r.jina.ai/https://example.com/", 500, "boom", {}, None
+        )
+
+    fake_opener = MagicMock()
+    cm = fake_opener.open.return_value.__enter__.return_value
+    cm.headers = {"Content-Length": str(len(html_body))}
+    cm.read.side_effect = _streamed_read(html_body)
+
+    monkeypatch.setattr("src.tools_web.urllib.request.urlopen", jina_fail)
+    monkeypatch.setattr("src.tools_web.urllib.request.build_opener", lambda *_: fake_opener)
+
+    ctx = _ctx()
+    out = fetch_webpage(ctx, url="https://example.com/")
+    assert out["source"] == "raw"
+    assert out["title"] == "Raw Title"
+    assert "Raw body." in out["content"]
+    assert any(link["url"] == "https://docs.example.com/" for link in out["links"])
+
+
+def test_fetch_webpage_jina_body_over_cap_falls_back_to_raw(monkeypatch):
+    """Jina oversize → fall through to raw fetch instead of raising."""
+    from src.tools import fetch_webpage
+
+    _public_dns(monkeypatch)
+    settings = Settings(
+        slack_bot_token="xoxb-test",
+        slack_signing_secret="sig",
+        llm_provider="openai",
+        llm_model="gpt-4o-mini",
+        image_provider="openai",
+        image_model="gpt-image-1",
+        agent_max_steps=3,
+        response_language="ko",
+        dynamodb_table_name="t",
+        aws_region="us-east-1",
+        max_web_bytes=128,
+        max_web_chars=8000,
+        max_web_links=20,
+        jina_reader_base="https://r.jina.ai",
+    )
+    ctx = ToolContext(
+        slack_client=MagicMock(),
+        channel="C1",
+        thread_ts="ts1",
+        event={},
+        settings=settings,
+        llm=MagicMock(),
+    )
+
+    huge_jina = b"x" * 4096
+    raw_html = b"<html><body><p>raw small body</p></body></html>"
+
+    fake_opener = MagicMock()
+    cm = fake_opener.open.return_value.__enter__.return_value
+    cm.headers = {"Content-Length": str(len(raw_html))}
+    cm.read.side_effect = _streamed_read(raw_html)
+
+    with patch("src.tools_web.urllib.request.urlopen") as jina_open:
+        jresp = jina_open.return_value.__enter__.return_value
+        jresp.headers = {}  # no Content-Length → streamed-read path
+        jresp.read.side_effect = _streamed_read(huge_jina)
+        monkeypatch_build = patch("src.tools_web.urllib.request.build_opener", lambda *_: fake_opener)
+        with monkeypatch_build:
+            out = fetch_webpage(ctx, url="https://example.com/")
+    assert out["source"] == "raw"
+    assert "raw small body" in out["content"]
+
+
+def test_fetch_webpage_max_chars_truncates(monkeypatch):
+    from src.tools import fetch_webpage
+
+    _public_dns(monkeypatch)
+    long_body = b"Title: T\nURL Source: https://example.com/\nMarkdown Content:\n" + (b"A" * 500)
+    ctx = _ctx()
+    with patch("src.tools_web.urllib.request.urlopen") as opener:
+        resp = opener.return_value.__enter__.return_value
+        resp.headers = {"Content-Length": str(len(long_body))}
+        resp.read.side_effect = _streamed_read(long_body)
+        out = fetch_webpage(ctx, url="https://example.com/", max_chars=200)
+    assert out["truncated"] is True
+    assert out["chars"] == 200
+    assert len(out["content"]) == 200
+
+
+def test_fetch_webpage_max_links_dedup(monkeypatch):
+    from src.tools import fetch_webpage
+
+    _public_dns(monkeypatch)
+    link_section = (
+        "[a](https://a.example/)"
+        "[b](https://b.example/)"
+        "[c](https://c.example/)"
+        "[d](https://d.example/)"
+        "[dup-a](https://a.example/)"
+        "[e](https://e.example/)"
+        "[dup-b](https://b.example/)"
+        "[f](https://f.example/)"
+    )
+    payload = (
+        "Title: T\nURL Source: https://example.com/\nMarkdown Content:\n" + link_section
+    ).encode()
+    ctx = _ctx()
+    with patch("src.tools_web.urllib.request.urlopen") as opener:
+        resp = opener.return_value.__enter__.return_value
+        resp.headers = {"Content-Length": str(len(payload))}
+        resp.read.side_effect = _streamed_read(payload)
+        out = fetch_webpage(ctx, url="https://example.com/", max_links=3)
+    urls = [link["url"] for link in out["links"]]
+    assert urls == [
+        "https://a.example/",
+        "https://b.example/",
+        "https://c.example/",
+    ]
