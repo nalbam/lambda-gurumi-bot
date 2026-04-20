@@ -73,7 +73,7 @@ and diverges from native function-calling semantics.
 
 ### Agent loop uses NATIVE function calling, not JSON prompting
 
-`src/agent.py` passes `registry.specs()` directly to `LLMProvider.chat(tools=...)`. The provider (`src/llm.py`) translates that to OpenAI `tools=[{type:"function",function:{...}}]` or Bedrock `tools=[{name, description, input_schema}]` (Claude) / `toolConfig` (Nova). There is **no JSON-in-prompt parsing** — tool calls arrive as structured objects. Loop terminates when `stop_reason != "tool_use"` or `max_steps` hit. On max_steps, a forced compose step (`_compose_without_tools`) runs with `tools=None`.
+`src/agent.py` passes `registry.specs()` directly to `LLMProvider.chat(tools=...)`. The provider (`src/llms/`) translates that to OpenAI `tools=[{type:"function",function:{...}}]` or Bedrock `tools=[{name, description, input_schema}]` (Claude) / `toolConfig` (Nova). There is **no JSON-in-prompt parsing** — tool calls arrive as structured objects. Loop terminates when `stop_reason != "tool_use"` or `max_steps` hit. On max_steps, a forced compose step (`_compose_without_tools`) runs with `tools=None`.
 
 Duplicate tool-call suppression: `_call_signature` = `name + sha1(args_json)`. A repeated signature within the loop is short-circuited with `{"ok": False, "error": "duplicate call skipped"}` and handed back to the LLM so it can move on.
 
@@ -108,7 +108,7 @@ Image generation is family-routed too: Titan/Nova-Canvas use `TEXT_IMAGE` task; 
 
 ### Public web fetching is SSRF-gated
 
-`fetch_webpage` uses `_validate_public_https_url` (in `src/tools_web.py`) to enforce `https`, reject IP literals, and drop DNS results resolving to any non-public address (private / loopback / link-local / reserved / multicast / unspecified / non-global — CGNAT `100.64.0.0/10` included). The Jina Reader path (`{JINA_READER_BASE}/{percent-encoded url}`) does the actual network hop against the target; the raw fallback (and only the raw fallback, since the Jina path uses Jina's own fetch) goes direct with a `_NoRedirectHandler` that refuses 3xx, so a redirect into RFC1918 space can't slip past the pre-flight DNS check. Body size is capped by `MAX_WEB_BYTES` on both paths; if Jina exceeds the cap we fall through to raw (the direct fetch may be smaller than Jina's markdown-ified output). Web helpers live in `src/tools_web.py` and are re-exported from `src/tools.py` for callers and test imports.
+`fetch_webpage` uses `_validate_public_https_url` (in `src/tools/web.py`) to enforce `https`, reject IP literals, and drop DNS results resolving to any non-public address (private / loopback / link-local / reserved / multicast / unspecified / non-global — CGNAT `100.64.0.0/10` included). The Jina Reader path (`{JINA_READER_BASE}/{percent-encoded url}`) does the actual network hop against the target; the raw fallback (and only the raw fallback, since the Jina path uses Jina's own fetch) goes direct with a `_NoRedirectHandler` that refuses 3xx, so a redirect into RFC1918 space can't slip past the pre-flight DNS check. Body size is capped by `MAX_WEB_BYTES` on both paths; if Jina exceeds the cap we fall through to raw (the direct fetch may be smaller than Jina's markdown-ified output). Web helpers live in `src/tools/web.py`. Every tool submodule registers itself into `default_registry` at import time; `src/tools/__init__.py` imports the submodules so importing the package is enough to make every built-in tool available.
 
 ### Config is lazy, not import-time
 
@@ -125,6 +125,14 @@ Stream throttling is handled inside `StreamingMessage.append()` (`min_interval=0
 ### Structured logging with request_id
 
 `src/logging_utils.py` installs a JSON handler on root. `set_request_id(uuid)` is called at the start of each `_process`. `log_event(logger, "agent.done", steps=..., tokens_in=...)` emits records whose `extra_fields` dict survives into the JSON payload — useful for CloudWatch Insights queries. Because `logging.LoggerAdapter.process()` in Python 3.12 overwrites `extra=`, `log_event` dispatches via `logger.logger` (the underlying `Logger`) instead of the adapter.
+
+### Extension points
+
+**Add a new tool.** Create `src/tools/<name>.py` with one or more functions decorated by `@tool(default_registry, name="...", description="...", parameters={...})`. Add `<name>` to the side-effect import block in `src/tools/__init__.py`. Add `tests/tools/test_<name>.py`. That's it — the agent loop sees the new tool because `default_registry` is populated at import time.
+
+**Add a new LLM provider.** Create `src/llms/<name>.py` with a class that satisfies the `LLMProvider` Protocol (`chat`, `stream_chat`, `describe_image`, `generate_image`). Add a branch to `src/llms/factory.py`'s `get_llm`, and if the provider introduces new model families extend `_VALID_PROVIDERS` in `src/config.py`. Add `tests/llms/test_<name>.py`.
+
+Neither extension requires editing the registry or the agent loop.
 
 ## Deployment
 
