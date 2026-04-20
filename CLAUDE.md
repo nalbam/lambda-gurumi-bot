@@ -19,6 +19,8 @@ python localtest.py                       # interactive stdin (Ctrl+D)
 python -m pytest
 python -m pytest --cov=src --cov-report=term-missing
 python -m pytest tests/test_agent.py::test_agent_runs_tool_then_returns_text -v
+python -m pytest tests/llms/test_bedrock.py -v                          # LLM provider unit tests
+python -m pytest tests/tools/test_web.py -v                             # fetch_webpage + SSRF guard
 
 # Deploy (requires IAM OIDC role `lambda-gurumi-bot`)
 npm i -g serverless@3
@@ -154,16 +156,22 @@ Separate from the Lambda runtime role. `trust-policy.json` allows both `repo:aws
 
 ## Testing
 
-125 tests, 86% overall coverage. `pytest.ini` pins `testpaths = tests`, `filterwarnings = ignore::DeprecationWarning`. Key approach:
+161 tests, 89% overall coverage. `pytest.ini` pins `testpaths = tests`, `filterwarnings = ignore::DeprecationWarning`. Key approach:
 
+- Tests mirror source layout: `tests/llms/` for each `src/llms/*` submodule, `tests/tools/` for each `src/tools/*` submodule. Top-level `tests/test_agent.py`, `test_config.py`, `test_dedup.py`, `test_logging_utils.py`, `test_slack_helpers.py` cover the non-packaged modules.
+- Shared tool-test fixtures (`_ctx`, `_settings`, `_streamed_read`) live in `tests/tools/_helpers.py` — individual test files import from there instead of redefining them.
 - `moto[dynamodb]` for `DedupStore` / `ConversationStore` integration tests.
-- `responses` / `unittest.mock.patch("src.tools.urllib.request.urlopen")` for web tools.
+- Network patches target the submodule where `urllib` / `socket` is imported, not the package: `patch("src.tools.slack.urllib.request.urlopen")` for Slack file fetch, `patch("src.tools.search.urllib.request.urlopen")` for `search_web`, `patch("src.tools.web.urllib.request.urlopen")` and `monkeypatch.setattr("src.tools.web.socket.getaddrinfo", …)` for `fetch_webpage`.
 - `ScriptedLLM` (in `tests/test_agent.py`) emits predefined `LLMResult` sequences to drive the agent loop without any network.
 - Provider tests use `MagicMock` clients — no real OpenAI / Bedrock / xAI calls.
 - `tests/test_config.py` builds `Settings` from `monkeypatch`-controlled env without reloading the module.
 - `reportlab` (dev-only) synthesizes real PDFs for `read_attached_document` parser coverage.
 
-Per-module coverage: `agent.py` 96%, `config.py` 98%, `tools.py` 90%, `llm.py` 84%, `slack_helpers.py` 83%, `dedup.py` 78%, `logging_utils.py` 68%.
+Per-module coverage:
+
+- `agent.py` 96%, `config.py` 98%, `dedup.py` 78%, `slack_helpers.py` 83%, `logging_utils.py` 68%
+- `llms/`: `base.py` 70%, `openai_wire.py` 96%, `openai.py` 100%, `xai.py` 100%, `bedrock.py` 76%, `composite.py` 87%, `factory.py` 94%
+- `tools/`: `registry.py` 100%, `slack.py` 86%, `search.py` 93%, `web.py` 97%, `image.py` 100%, `time.py` 100%
 
 ## Things that are easy to break
 
