@@ -824,3 +824,111 @@ def test_no_redirect_handler_raises_on_302():
     req = urllib.request.Request("https://example.com/")
     with pytest.raises(urllib.error.HTTPError, match="redirects not allowed"):
         handler.redirect_request(req, None, 302, "Found", {}, "https://evil.example/")
+
+
+# --------------------------------------------------------------------------- #
+# fetch_webpage — HTML parser + Jina response parser
+# --------------------------------------------------------------------------- #
+
+
+def test_html_text_extractor_basic():
+    from src.tools import _HtmlTextExtractor
+
+    html = (
+        "<html><head><title>  Hello </title></head>"
+        "<body>"
+        "<script>alert('x')</script>"
+        "<style>.a{}</style>"
+        "<h1>Heading</h1>"
+        "<p>Para one.</p>"
+        "<p>Para two.</p>"
+        "<a href='https://a.example/1'>Link A</a>"
+        "<a href='/relative'>Rel</a>"
+        "<a href='#frag'>Frag</a>"
+        "<a href='mailto:x@y'>Mail</a>"
+        "</body></html>"
+    )
+    x = _HtmlTextExtractor("https://base.example/page")
+    x.feed(html)
+    assert x.title() == "Hello"
+    text = x.text()
+    assert "Heading" in text
+    assert "Para one." in text
+    assert "Para two." in text
+    assert "alert" not in text
+    assert ".a{}" not in text
+    assert ("Link A", "https://a.example/1") in x.links
+    # Relative links resolved against base
+    assert ("Rel", "https://base.example/relative") in x.links
+    # mailto / fragment retained raw — filtering happens in _filter_links
+    assert any(url.startswith("mailto:") for _, url in x.links)
+
+
+def test_filter_links_drops_non_https_and_dedups():
+    from src.tools import _filter_links
+
+    raw = [
+        ("A", "https://a.example/1"),
+        ("A dup", "https://a.example/1#top"),  # dedups by fragment-stripped url
+        ("B", "https://b.example/"),
+        ("Self", "https://base.example/page"),  # self-ref dropped
+        ("Mail", "mailto:x@y"),
+        ("JS", "javascript:void(0)"),
+        ("HTTP", "http://insecure.example/"),
+    ]
+    out = _filter_links(raw, base_url="https://base.example/page", limit=10)
+    urls = [item["url"] for item in out]
+    assert urls == ["https://a.example/1", "https://b.example/"]
+    assert out[0]["title"] == "A"
+
+
+def test_filter_links_respects_limit():
+    from src.tools import _filter_links
+
+    raw = [(f"T{i}", f"https://x.example/{i}") for i in range(5)]
+    out = _filter_links(raw, base_url="https://base.example/", limit=3)
+    assert len(out) == 3
+    assert [item["url"] for item in out] == [
+        "https://x.example/0",
+        "https://x.example/1",
+        "https://x.example/2",
+    ]
+
+
+def test_extract_markdown_links_parses_inline_markdown():
+    from src.tools import _extract_markdown_links
+
+    md = (
+        "Title\n\nSome prose with [Google](https://google.com/about) "
+        "and [Self](https://base.example/page) and [Same](https://google.com/about?ref=x).\n"
+        "[Another](https://example.org/)"
+    )
+    out = _extract_markdown_links(md, base_url="https://base.example/page", limit=10)
+    urls = [item["url"] for item in out]
+    assert "https://google.com/about" in urls
+    assert "https://example.org/" in urls
+    assert "https://base.example/page" not in urls  # self-ref dropped
+
+
+def test_parse_jina_response_strips_header():
+    from src.tools import _parse_jina_response
+
+    payload = (
+        "Title: Example Page\n"
+        "URL Source: https://example.com/\n"
+        "Markdown Content:\n"
+        "# Heading\n\nBody text.\n"
+    )
+    title, body = _parse_jina_response(payload)
+    assert title == "Example Page"
+    assert body.startswith("# Heading")
+    assert "URL Source" not in body
+
+
+def test_parse_jina_response_no_header():
+    from src.tools import _parse_jina_response
+
+    payload = "just raw markdown\n\nwith no prefix"
+    title, body = _parse_jina_response(payload)
+    assert title == ""
+    assert body == payload

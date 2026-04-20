@@ -10,11 +10,13 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import re
 import socket
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from html.parser import HTMLParser
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -677,5 +679,134 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(
             req.full_url, code, "redirects not allowed", headers, fp
         )
+
+
+_JINA_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+
+
+class _HtmlTextExtractor(HTMLParser):
+    """Streams visible text + <a> links out of raw HTML.
+
+    Skips content inside script/style/noscript/template. Breaks paragraphs
+    on block-level end tags. Link hrefs are resolved against ``base_url``;
+    filtering (https-only, dedup, self-ref drop) is left to ``_filter_links``.
+    """
+
+    _SKIP_TAGS = {"script", "style", "noscript", "template"}
+    _BREAK_TAGS = {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "br", "tr"}
+
+    def __init__(self, base_url: str):
+        super().__init__(convert_charrefs=True)
+        self._base_url = base_url
+        self._skip_depth = 0
+        self._text_chunks: list[str] = []
+        self._title_chunks: list[str] = []
+        self._in_title = False
+        self._current_link_url: str | None = None
+        self._current_link_text: list[str] = []
+        self.links: list[tuple[str, str]] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._SKIP_TAGS:
+            self._skip_depth += 1
+            return
+        if tag == "title":
+            self._in_title = True
+            return
+        if tag == "a":
+            href = dict(attrs).get("href")
+            if href:
+                self._current_link_url = urllib.parse.urljoin(self._base_url, href)
+                self._current_link_text = []
+
+    def handle_endtag(self, tag):
+        if tag in self._SKIP_TAGS:
+            if self._skip_depth > 0:
+                self._skip_depth -= 1
+            return
+        if tag == "title":
+            self._in_title = False
+            return
+        if tag == "a" and self._current_link_url is not None:
+            text = " ".join("".join(self._current_link_text).split())
+            self.links.append((text, self._current_link_url))
+            self._current_link_url = None
+            self._current_link_text = []
+            return
+        if tag in self._BREAK_TAGS:
+            self._text_chunks.append("\n")
+
+    def handle_data(self, data):
+        if self._skip_depth > 0:
+            return
+        if self._in_title:
+            self._title_chunks.append(data)
+            return
+        if self._current_link_url is not None:
+            self._current_link_text.append(data)
+        self._text_chunks.append(data)
+
+    def title(self) -> str:
+        return " ".join("".join(self._title_chunks).split())
+
+    def text(self) -> str:
+        joined = "".join(self._text_chunks)
+        lines = [" ".join(line.split()) for line in joined.split("\n")]
+        return "\n".join(line for line in lines if line)
+
+
+def _filter_links(
+    raw: list[tuple[str, str]], base_url: str, limit: int
+) -> list[dict[str, str]]:
+    if limit <= 0:
+        return []
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+    for text, url in raw:
+        if not url.startswith("https://"):
+            continue
+        parsed = urllib.parse.urlparse(url)
+        if not parsed.netloc:
+            continue
+        key = url.split("#", 1)[0]
+        if key == base_url.split("#", 1)[0]:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"title": (text or url).strip(), "url": url})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _extract_markdown_links(
+    md: str, base_url: str, limit: int
+) -> list[dict[str, str]]:
+    raw = [(m.group(1), m.group(2)) for m in _JINA_LINK_RE.finditer(md)]
+    return _filter_links(raw, base_url, limit)
+
+
+def _parse_jina_response(text: str) -> tuple[str, str]:
+    """Split the Jina Reader preamble ("Title:", "URL Source:", "Markdown
+    Content:") from the body. Returns (title, body)."""
+    if not text:
+        return "", ""
+    all_lines = text.split("\n")
+    title = ""
+    body_start = 0
+    for i, line in enumerate(all_lines[:10]):
+        if line.startswith("Title: "):
+            title = line[len("Title: "):].strip()
+            body_start = max(body_start, i + 1)
+        elif line.startswith("URL Source: "):
+            body_start = max(body_start, i + 1)
+        elif line.startswith("Markdown Content:"):
+            body_start = i + 1
+            break
+    if body_start == 0:
+        return title, text
+    body = "\n".join(all_lines[body_start:]).lstrip("\n")
+    return title, body
 
 
