@@ -108,7 +108,7 @@ Image generation is family-routed too: Titan/Nova-Canvas use `TEXT_IMAGE` task; 
 
 ### Public web fetching is SSRF-gated
 
-`fetch_webpage` uses `_validate_public_https_url` (in `src/tools_web.py`) to enforce `https`, reject IP literals, and drop DNS results resolving to any non-public address (private / loopback / link-local / reserved / multicast / unspecified / non-global — CGNAT `100.64.0.0/10` included). The Jina Reader path (`{JINA_READER_BASE}/{percent-encoded url}`) does the actual network hop against the target; the raw fallback goes direct with a `_NoRedirectHandler` that refuses 3xx, so a redirect into RFC1918 space can't slip past the pre-flight DNS check. Body size is capped by `MAX_WEB_BYTES` on both paths; if Jina exceeds the cap we fall through to raw (the direct fetch may be smaller than Jina's markdown-ified output). Web helpers live in `src/tools_web.py` and are re-exported from `src/tools.py` for callers and test imports.
+`fetch_webpage` uses `_validate_public_https_url` (in `src/tools_web.py`) to enforce `https`, reject IP literals, and drop DNS results resolving to any non-public address (private / loopback / link-local / reserved / multicast / unspecified / non-global — CGNAT `100.64.0.0/10` included). The Jina Reader path (`{JINA_READER_BASE}/{percent-encoded url}`) does the actual network hop against the target; the raw fallback (and only the raw fallback, since the Jina path uses Jina's own fetch) goes direct with a `_NoRedirectHandler` that refuses 3xx, so a redirect into RFC1918 space can't slip past the pre-flight DNS check. Body size is capped by `MAX_WEB_BYTES` on both paths; if Jina exceeds the cap we fall through to raw (the direct fetch may be smaller than Jina's markdown-ified output). Web helpers live in `src/tools_web.py` and are re-exported from `src/tools.py` for callers and test imports.
 
 ### Config is lazy, not import-time
 
@@ -167,6 +167,7 @@ Per-module coverage: `agent.py` 96%, `config.py` 98%, `tools.py` 90%, `llm.py` 8
 - **Adding a tool without updating `ToolRegistry.specs()`** — the `@tool` decorator handles both dispatch and LLM schema from a single declaration; inline dict tricks will silently desync.
 - **Removing the SSRF guard (`_validate_public_https_url`) on `fetch_webpage`** re-opens fetch to RFC1918 space and cloud-metadata endpoints (e.g. `169.254.169.254`).
 - **Enabling redirects on the `fetch_webpage` raw fallback** — a 302 to a private host bypasses the pre-flight DNS check; keep `_NoRedirectHandler` installed.
+- **DNS rebinding on `fetch_webpage` raw fallback**. The pre-flight `getaddrinfo` check and the eventual TCP connect are two separate DNS lookups; a TTL=0 attacker can flip between them. Lambda's environment makes the attack hard and impact is bounded (no VPC by default), but don't treat `_validate_public_https_url` as a guarantee that the actual connection hits the same IP. If you ever add VPC/private-subnet egress, revisit this.
 
 ## Excluded (Phase 2+)
 

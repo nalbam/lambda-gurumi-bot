@@ -176,3 +176,10 @@ def test_web_fetch_below_minimum_clamped(monkeypatch, reload_config):
     s = reload_config()
     assert s.max_web_chars == 500
     assert s.max_web_bytes == 64 * 1024
+
+
+def test_web_fetch_jina_reader_base_http_rejected(monkeypatch, reload_config):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("JINA_READER_BASE", "http://internal.proxy.example")
+    s = reload_config()
+    assert s.jina_reader_base == "https://r.jina.ai"  # fallback

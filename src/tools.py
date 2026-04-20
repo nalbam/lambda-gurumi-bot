@@ -569,6 +569,9 @@ def fetch_webpage(
     jina_ok = False
     jina_err: str | None = None
 
+    # HTTPError is a subclass of URLError; we list both to make the
+    # "HTTP status error" path visible as a first-class error type for
+    # readers. Order doesn't affect matching (URLError catches both).
     try:
         jina_text = _jina_fetch(settings.jina_reader_base, url, settings.max_web_bytes)
         parsed_title, body = _parse_jina_response(jina_text)
@@ -581,8 +584,8 @@ def fetch_webpage(
             jina_err = "empty body"
     except (
         ValueError,
-        urllib.error.URLError,
         urllib.error.HTTPError,
+        urllib.error.URLError,
         socket.timeout,
         UnicodeDecodeError,
     ) as exc:
@@ -599,8 +602,8 @@ def fetch_webpage(
             html_text = _raw_fetch(url, settings.max_web_bytes)
         except (
             ValueError,
-            urllib.error.URLError,
             urllib.error.HTTPError,
+            urllib.error.URLError,
             socket.timeout,
         ) as exc:
             raise ValueError(

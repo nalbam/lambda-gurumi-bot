@@ -70,6 +70,18 @@ def _enum_env(name: str, default: str, valid: set[str]) -> str:
     return value
 
 
+def _https_url_env(name: str, default: str) -> str:
+    """Return an https:// URL from env, falling back to default on empty
+    or non-https values."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    if not raw.startswith("https://"):
+        logger.warning("invalid %s=%r (not https), falling back to %s", name, raw, default)
+        return default
+    return raw
+
+
 @dataclass(frozen=True)
 class Settings:
     slack_bot_token: str
@@ -143,8 +155,7 @@ class Settings:
             max_web_chars=_int_env("MAX_WEB_CHARS", 8000, minimum=500),
             max_web_bytes=_int_env("MAX_WEB_BYTES", 2 * 1024 * 1024, minimum=64 * 1024),
             max_web_links=_int_env("MAX_WEB_LINKS", 20, minimum=0),
-            jina_reader_base=(os.getenv("JINA_READER_BASE", "https://r.jina.ai").strip()
-                              or "https://r.jina.ai"),
+            jina_reader_base=_https_url_env("JINA_READER_BASE", "https://r.jina.ai"),
         )
 
     def require_slack_credentials(self) -> None:
