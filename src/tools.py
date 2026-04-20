@@ -804,6 +804,50 @@ def _extract_markdown_links(
     return _filter_links(raw, base_url, limit)
 
 
+def _read_body_capped(response, max_bytes: int) -> bytes:
+    content_length = response.headers.get("Content-Length") if response.headers else None
+    if content_length and content_length.isdigit() and int(content_length) > max_bytes:
+        raise ValueError(f"webpage exceeds MAX_WEB_BYTES={max_bytes}")
+    body = response.read(max_bytes + 1)
+    if len(body) > max_bytes:
+        raise ValueError(f"webpage exceeds MAX_WEB_BYTES={max_bytes}")
+    return body
+
+
+def _jina_fetch(base: str, target_url: str, max_bytes: int) -> str:
+    """Call Jina Reader and return the markdown body as text.
+
+    Size gate is identical to the raw path; oversize responses raise so the
+    caller can fall through to a direct fetch (which may be smaller).
+    """
+    quoted = urllib.parse.quote(target_url, safe=":/?#[]@!$&'()*+,;=")
+    endpoint = f"{base.rstrip('/')}/{quoted}"
+    req = urllib.request.Request(
+        endpoint,
+        headers={
+            "Accept": "text/markdown",
+            "User-Agent": _PUBLIC_WEB_UA,
+            "X-Return-Format": "markdown",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=12) as response:  # noqa: S310 (URL built from validated base + percent-encoded target)
+        body = _read_body_capped(response, max_bytes)
+    return body.decode("utf-8", errors="replace")
+
+
+def _raw_fetch(url: str, max_bytes: int) -> str:
+    """Direct GET on the target URL with redirects disabled.
+
+    Caller is expected to have passed ``url`` through
+    ``_validate_public_https_url`` so the connection target is public.
+    """
+    opener = urllib.request.build_opener(_NoRedirectHandler())
+    req = urllib.request.Request(url, headers={"User-Agent": _PUBLIC_WEB_UA})
+    with opener.open(req, timeout=12) as response:  # noqa: S310
+        body = _read_body_capped(response, max_bytes)
+    return body.decode("utf-8", errors="replace")
+
+
 def _parse_jina_response(text: str) -> tuple[str, str]:
     """Split the Jina Reader preamble ("Title:", "URL Source:", "Markdown
     Content:") from the body. Returns (title, body)."""

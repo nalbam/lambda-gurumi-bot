@@ -990,3 +990,89 @@ def test_parse_jina_response_inline_markdown_content():
     assert title == "T"
     assert body.startswith("# Heading")
     assert "Body here." in body
+
+
+# --------------------------------------------------------------------------- #
+# fetch_webpage — fetch helpers
+# --------------------------------------------------------------------------- #
+
+
+def _streamed_read(body: bytes):
+    """Build a urlopen-mock read side_effect that serves `body` in chunks."""
+    buf = {"pos": 0}
+
+    def _chunked(n=-1):
+        if n == -1:
+            remaining = body[buf["pos"]:]
+            buf["pos"] = len(body)
+            return remaining
+        chunk = body[buf["pos"]:buf["pos"] + n]
+        buf["pos"] += len(chunk)
+        return chunk
+
+    return _chunked
+
+
+def test_jina_fetch_returns_body_under_cap():
+    from src.tools import _jina_fetch
+
+    payload = b"Title: x\nURL Source: https://example.com/\n\nBody here."
+    with patch("src.tools.urllib.request.urlopen") as opener:
+        resp = opener.return_value.__enter__.return_value
+        resp.headers = {"Content-Length": str(len(payload)), "Content-Type": "text/markdown"}
+        resp.read.side_effect = _streamed_read(payload)
+        text = _jina_fetch("https://r.jina.ai", "https://example.com/", max_bytes=1024)
+    assert "Body here." in text
+
+
+def test_jina_fetch_content_length_over_cap():
+    from src.tools import _jina_fetch
+
+    with patch("src.tools.urllib.request.urlopen") as opener:
+        resp = opener.return_value.__enter__.return_value
+        resp.headers = {"Content-Length": "999999"}
+        resp.read.side_effect = _streamed_read(b"x" * 10)
+        with pytest.raises(ValueError, match="MAX_WEB_BYTES"):
+            _jina_fetch("https://r.jina.ai", "https://example.com/", max_bytes=1024)
+
+
+def test_jina_fetch_streamed_over_cap():
+    from src.tools import _jina_fetch
+
+    body = b"x" * 2000
+    with patch("src.tools.urllib.request.urlopen") as opener:
+        resp = opener.return_value.__enter__.return_value
+        resp.headers = {}  # no Content-Length
+        resp.read.side_effect = _streamed_read(body)
+        with pytest.raises(ValueError, match="MAX_WEB_BYTES"):
+            _jina_fetch("https://r.jina.ai", "https://example.com/", max_bytes=1024)
+
+
+def test_raw_fetch_returns_body_under_cap(monkeypatch):
+    from src.tools import _raw_fetch
+
+    body = b"<html><title>Hi</title><body>hello</body></html>"
+
+    # _raw_fetch builds its own opener (with _NoRedirectHandler) and calls opener.open.
+    # Patch urllib.request.build_opener so we intercept that call.
+    fake_opener = MagicMock()
+    cm = fake_opener.open.return_value.__enter__.return_value
+    cm.headers = {"Content-Length": str(len(body)), "Content-Type": "text/html"}
+    cm.read.side_effect = _streamed_read(body)
+    monkeypatch.setattr("src.tools.urllib.request.build_opener", lambda *_: fake_opener)
+
+    html = _raw_fetch("https://example.com/", max_bytes=1024)
+    assert "hello" in html
+
+
+def test_raw_fetch_streamed_over_cap(monkeypatch):
+    from src.tools import _raw_fetch
+
+    body = b"a" * 4096
+    fake_opener = MagicMock()
+    cm = fake_opener.open.return_value.__enter__.return_value
+    cm.headers = {}
+    cm.read.side_effect = _streamed_read(body)
+    monkeypatch.setattr("src.tools.urllib.request.build_opener", lambda *_: fake_opener)
+    with pytest.raises(ValueError, match="MAX_WEB_BYTES"):
+        _raw_fetch("https://example.com/", max_bytes=1024)
