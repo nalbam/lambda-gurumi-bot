@@ -7,8 +7,10 @@ blocking the whole agent loop.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -616,5 +618,61 @@ def _tavily_search(api_key: str, query: str, limit: int) -> list[dict[str, str]]
         {"title": r.get("title", ""), "url": r.get("url", ""), "content": r.get("content", "")}
         for r in payload.get("results", [])[:limit]
     ]
+
+
+_PUBLIC_WEB_UA = "lambda-gurumi-bot/1.0 (+https://github.com/nalbam/lambda-gurumi-bot)"
+
+
+def _validate_public_https_url(url: str) -> tuple[str, str]:
+    """Return (scheme, hostname) after asserting the URL is safe to fetch.
+
+    Rules:
+      - scheme == 'https'
+      - hostname is present and is NOT an IP literal
+      - every address returned by getaddrinfo for the hostname is a public,
+        routable unicast address (not private / loopback / link-local /
+        reserved / multicast / unspecified).
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError("fetch_webpage requires https")
+    host = parsed.hostname
+    if not host:
+        raise ValueError("URL missing hostname")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("IP literals not allowed")
+    try:
+        infos = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ValueError(f"DNS resolution failed: {exc}") from exc
+    for info in infos:
+        addr = ipaddress.ip_address(info[4][0])
+        if (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_reserved
+            or addr.is_multicast
+            or addr.is_unspecified
+        ):
+            raise ValueError("hostname resolves to non-public address")
+    return parsed.scheme, host
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """urllib handler that refuses to follow redirects.
+
+    Raw fetches must hit exactly the host whose DNS we pre-validated. A 3xx
+    pointing at a private host would silently defeat the SSRF guard.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(
+            req.full_url, code, "redirects not allowed", headers, fp
+        )
 
 

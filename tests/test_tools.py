@@ -738,3 +738,76 @@ def test_read_attached_document_http_error_returns_per_item():
     assert len(out) == 1
     assert "error" in out[0]
     assert "404" in out[0]["error"]
+
+
+# --------------------------------------------------------------------------- #
+# fetch_webpage — SSRF guard
+# --------------------------------------------------------------------------- #
+
+
+def test_validate_public_https_url_rejects_http_scheme():
+    from src.tools import _validate_public_https_url
+
+    with pytest.raises(ValueError, match="https"):
+        _validate_public_https_url("http://example.com/")
+
+
+def test_validate_public_https_url_rejects_ip_literal_v4():
+    from src.tools import _validate_public_https_url
+
+    with pytest.raises(ValueError, match="IP literals"):
+        _validate_public_https_url("https://127.0.0.1/")
+
+
+def test_validate_public_https_url_rejects_ip_literal_v6():
+    from src.tools import _validate_public_https_url
+
+    with pytest.raises(ValueError, match="IP literals"):
+        _validate_public_https_url("https://[::1]/")
+
+
+def test_validate_public_https_url_rejects_private_dns(monkeypatch):
+    from src.tools import _validate_public_https_url
+
+    def fake_getaddrinfo(host, port, type=None, *args, **kwargs):
+        # Simulate DNS pointing at RFC1918 space.
+        return [(None, None, None, "", ("10.0.0.1", port))]
+
+    monkeypatch.setattr("src.tools.socket.getaddrinfo", fake_getaddrinfo)
+    with pytest.raises(ValueError, match="non-public"):
+        _validate_public_https_url("https://internal.corp.example/")
+
+
+def test_validate_public_https_url_rejects_metadata_host(monkeypatch):
+    from src.tools import _validate_public_https_url
+
+    def fake_getaddrinfo(host, port, type=None, *args, **kwargs):
+        return [(None, None, None, "", ("169.254.169.254", port))]
+
+    monkeypatch.setattr("src.tools.socket.getaddrinfo", fake_getaddrinfo)
+    with pytest.raises(ValueError, match="non-public"):
+        _validate_public_https_url("https://cloud.metadata.example/")
+
+
+def test_validate_public_https_url_accepts_public_host(monkeypatch):
+    from src.tools import _validate_public_https_url
+
+    def fake_getaddrinfo(host, port, type=None, *args, **kwargs):
+        return [(None, None, None, "", ("93.184.216.34", port))]  # example.com
+
+    monkeypatch.setattr("src.tools.socket.getaddrinfo", fake_getaddrinfo)
+    scheme, host = _validate_public_https_url("https://example.com/path")
+    assert scheme == "https"
+    assert host == "example.com"
+
+
+def test_no_redirect_handler_raises_on_302():
+    import urllib.error
+    import urllib.request
+
+    from src.tools import _NoRedirectHandler
+
+    handler = _NoRedirectHandler()
+    req = urllib.request.Request("https://example.com/")
+    with pytest.raises(urllib.error.HTTPError):
+        handler.redirect_request(req, None, 302, "Found", {}, "https://evil.example/")
