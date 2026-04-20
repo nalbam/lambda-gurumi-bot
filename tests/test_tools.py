@@ -1228,6 +1228,35 @@ def test_fetch_webpage_max_chars_truncates(monkeypatch):
     assert len(out["content"]) == 200
 
 
+def test_fetch_webpage_both_paths_fail_raises(monkeypatch):
+    from src.tools import fetch_webpage
+    import urllib.error
+
+    _public_dns(monkeypatch)
+
+    def jina_500(*args, **kwargs):
+        raise urllib.error.HTTPError(
+            "https://r.jina.ai/...", 500, "jina boom", {}, None
+        )
+
+    def raw_503(*args, **kwargs):
+        raise urllib.error.HTTPError(
+            "https://example.com/", 503, "raw boom", {}, None
+        )
+
+    fake_opener = MagicMock()
+    fake_opener.open.side_effect = raw_503
+
+    monkeypatch.setattr("src.tools_web.urllib.request.urlopen", jina_500)
+    monkeypatch.setattr(
+        "src.tools_web.urllib.request.build_opener", lambda *_: fake_opener
+    )
+
+    ctx = _ctx()
+    with pytest.raises(ValueError, match=r"jina=.*raw="):
+        fetch_webpage(ctx, url="https://example.com/")
+
+
 def test_fetch_webpage_max_links_dedup(monkeypatch):
     from src.tools import fetch_webpage
 

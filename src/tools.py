@@ -566,7 +566,7 @@ def fetch_webpage(
     title = ""
     content = ""
     links: list[dict[str, str]] = []
-    source = "raw"
+    jina_ok = False
     jina_err: str | None = None
 
     try:
@@ -576,7 +576,7 @@ def fetch_webpage(
             title = parsed_title
             content = body
             links = _extract_markdown_links(body, url, effective_links)
-            source = "jina"
+            jina_ok = True
         else:
             jina_err = "empty body"
     except (
@@ -587,9 +587,13 @@ def fetch_webpage(
         UnicodeDecodeError,
     ) as exc:
         jina_err = f"{exc.__class__.__name__}: {exc}"
-        logger.info("fetch_webpage jina fallback: %s", jina_err)
+        logger.debug("fetch_webpage jina fallback (url=%s): %s", url, jina_err)
 
-    if source != "jina":
+    if not jina_ok:
+        # Belt-and-suspenders: re-validate before the raw fetch. _raw_fetch
+        # assumes its caller has passed the URL through
+        # _validate_public_https_url; re-checking here keeps that contract
+        # enforced even if future refactors mutate `url` in between.
         _validate_public_https_url(url)
         try:
             html_text = _raw_fetch(url, settings.max_web_bytes)
@@ -607,6 +611,8 @@ def fetch_webpage(
         title = extractor.title() or title
         content = extractor.text()
         links = _filter_links(extractor.links, url, effective_links)
+
+    source = "jina" if jina_ok else "raw"
 
     truncated = False
     if len(content) > effective_chars:
