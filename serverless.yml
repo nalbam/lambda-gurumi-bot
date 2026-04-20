@@ -13,6 +13,10 @@ provider:
   stage: ${opt:stage, 'dev'}
   memorySize: 5120
   timeout: 90
+  stackTags:
+    katalog_id: "858"
+  tags:
+    katalog_id: "858"
   environment:
     # --- runtime-internal (serverless-provided, not from CI env) ---
     AWS_REGION_NAME: ${self:provider.region}
