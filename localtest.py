@@ -83,7 +83,7 @@ def _make_on_step(quiet: bool):
                 print(f"[step {step}] {mark} {tool}: {err}", file=sys.stderr, flush=True)
         elif phase == "compose":
             hint = " (max_steps 도달)" if detail.get("max_steps_hit") else ""
-            print(f"[step {step}] ▶ 답변 작성 중...{hint}", file=sys.stderr, flush=True)
+            print(f"\n[step {step}] ▶ 답변 작성 중...{hint}", file=sys.stderr, flush=True)
 
     return on_step
 
