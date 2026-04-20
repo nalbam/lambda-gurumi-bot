@@ -1,6 +1,7 @@
 """Tests for src.llms.openai."""
 from __future__ import annotations
 
+import base64
 import json
 from unittest.mock import MagicMock
 
@@ -190,9 +191,7 @@ def test_openai_translates_canonical_tool_calls():
     assert assistant["tool_calls"][0]["function"]["name"] == "search_web"
     # arguments must be a JSON string, not a dict
     assert isinstance(assistant["tool_calls"][0]["function"]["arguments"], str)
-    import json as _json
-
-    assert _json.loads(assistant["tool_calls"][0]["function"]["arguments"]) == {"query": "q"}
+    assert json.loads(assistant["tool_calls"][0]["function"]["arguments"]) == {"query": "q"}
 
 
 def test_openai_chat_parses_tool_calls():
@@ -250,12 +249,10 @@ def test_openai_describe_image_uses_vision_format():
 
 
 def test_openai_generate_image_decodes_b64():
-    import base64 as _b64
-
     provider = OpenAIProvider(model="gpt-4o-mini", image_model="gpt-image-1")
     provider._client = MagicMock()
     response = MagicMock()
-    response.data = [MagicMock(b64_json=_b64.b64encode(b"hello").decode())]
+    response.data = [MagicMock(b64_json=base64.b64encode(b"hello").decode())]
     provider._client.images.generate.return_value = response
     assert provider.generate_image("cat") == b"hello"
     kwargs = provider._client.images.generate.call_args.kwargs
@@ -264,12 +261,10 @@ def test_openai_generate_image_decodes_b64():
 
 
 def test_openai_generate_image_dalle_sends_response_format():
-    import base64 as _b64
-
     provider = OpenAIProvider(model="gpt-4o-mini", image_model="dall-e-3")
     provider._client = MagicMock()
     response = MagicMock()
-    response.data = [MagicMock(b64_json=_b64.b64encode(b"ok").decode())]
+    response.data = [MagicMock(b64_json=base64.b64encode(b"ok").decode())]
     provider._client.images.generate.return_value = response
     provider.generate_image("cat")
     kwargs = provider._client.images.generate.call_args.kwargs

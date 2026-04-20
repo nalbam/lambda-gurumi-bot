@@ -1,6 +1,7 @@
 """Tests for src.llms.bedrock."""
 from __future__ import annotations
 
+import base64
 import json
 from unittest.mock import MagicMock
 
@@ -36,9 +37,7 @@ def test_bedrock_inference_profile_routes_to_claude():
     assert result.content == "hi"
     # Claude body carries tools (not Nova's toolConfig)
     body = provider._client.invoke_model.call_args.kwargs["body"]
-    import json as _json
-
-    parsed = _json.loads(body)
+    parsed = json.loads(body)
     assert "tools" in parsed  # routed into _claude_chat, not fallback
     assert parsed["tools"][0]["name"] == "search_web"
 
@@ -196,8 +195,6 @@ def test_bedrock_describe_image_returns_text():
 
 
 def test_bedrock_generate_image_titan_returns_bytes():
-    import base64 as _b64
-
     provider = BedrockProvider(
         model="anthropic.claude-3-5-sonnet-20240620-v1:0",
         image_model="amazon.titan-image-generator-v1",
@@ -205,14 +202,12 @@ def test_bedrock_generate_image_titan_returns_bytes():
     )
     provider._client = MagicMock()
     provider._client.invoke_model.return_value = _bedrock_response(
-        {"images": [_b64.b64encode(b"imgdata").decode()]}
+        {"images": [base64.b64encode(b"imgdata").decode()]}
     )
     assert provider.generate_image("cat") == b"imgdata"
 
 
 def test_bedrock_generate_image_stability_returns_bytes():
-    import base64 as _b64
-
     provider = BedrockProvider(
         model="anthropic.claude-3-5-sonnet-20240620-v1:0",
         image_model="stability.stable-diffusion-xl-v1",
@@ -220,6 +215,6 @@ def test_bedrock_generate_image_stability_returns_bytes():
     )
     provider._client = MagicMock()
     provider._client.invoke_model.return_value = _bedrock_response(
-        {"artifacts": [{"base64": _b64.b64encode(b"xyz").decode()}]}
+        {"artifacts": [{"base64": base64.b64encode(b"xyz").decode()}]}
     )
     assert provider.generate_image("cat") == b"xyz"
