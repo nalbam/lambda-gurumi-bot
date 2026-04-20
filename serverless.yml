@@ -14,36 +14,48 @@ provider:
   memorySize: 5120
   timeout: 90
   environment:
-    DYNAMODB_TABLE_NAME: ${self:service}-${sls:stage}
+    # --- runtime-internal (serverless-provided, not from CI env) ---
     AWS_REGION_NAME: ${self:provider.region}
-    LLM_PROVIDER: ${env:LLM_PROVIDER, 'openai'}
-    LLM_MODEL: ${env:LLM_MODEL, 'gpt-4o-mini'}
-    IMAGE_PROVIDER: ${env:IMAGE_PROVIDER, 'openai'}
-    IMAGE_MODEL: ${env:IMAGE_MODEL, 'gpt-image-1'}
-    RESPONSE_LANGUAGE: ${env:RESPONSE_LANGUAGE, 'ko'}
-    AGENT_MAX_STEPS: ${env:AGENT_MAX_STEPS, '3'}
-    MAX_OUTPUT_TOKENS: ${env:MAX_OUTPUT_TOKENS, '4096'}
-    MAX_LEN_SLACK: ${env:MAX_LEN_SLACK, '3000'}
-    MAX_THROTTLE_COUNT: ${env:MAX_THROTTLE_COUNT, '100'}
-    MAX_HISTORY_CHARS: ${env:MAX_HISTORY_CHARS, '4000'}
-    BOT_CURSOR: ${env:BOT_CURSOR, ':robot_face:'}
-    ALLOWED_CHANNEL_IDS: ${env:ALLOWED_CHANNEL_IDS, ''}
-    ALLOWED_CHANNEL_MESSAGE: ${env:ALLOWED_CHANNEL_MESSAGE, ''}
-    SYSTEM_MESSAGE: ${env:SYSTEM_MESSAGE, ''}
-    LOG_LEVEL: ${env:LOG_LEVEL, 'INFO'}
-    DEFAULT_TIMEZONE: ${env:DEFAULT_TIMEZONE, 'Asia/Seoul'}
-    MAX_DOC_CHARS: ${env:MAX_DOC_CHARS, '20000'}
-    MAX_DOC_PAGES: ${env:MAX_DOC_PAGES, '50'}
-    MAX_DOC_BYTES: ${env:MAX_DOC_BYTES, '26214400'}
-    MAX_WEB_CHARS: ${env:MAX_WEB_CHARS, '8000'}
-    MAX_WEB_BYTES: ${env:MAX_WEB_BYTES, '2097152'}
-    MAX_WEB_LINKS: ${env:MAX_WEB_LINKS, '20'}
-    JINA_READER_BASE: ${env:JINA_READER_BASE, 'https://r.jina.ai'}
+    DYNAMODB_TABLE_NAME: ${self:service}-${sls:stage}
+    # --- secrets: Slack ---
     SLACK_BOT_TOKEN: ${env:SLACK_BOT_TOKEN}
     SLACK_SIGNING_SECRET: ${env:SLACK_SIGNING_SECRET}
+    # --- secrets: LLM provider keys ---
     OPENAI_API_KEY: ${env:OPENAI_API_KEY, ''}
     XAI_API_KEY: ${env:XAI_API_KEY, ''}
+    # --- secrets: Web search ---
     TAVILY_API_KEY: ${env:TAVILY_API_KEY, ''}
+    # --- vars: LLM / Image ---
+    IMAGE_MODEL: ${env:IMAGE_MODEL, 'gpt-image-1'}
+    IMAGE_PROVIDER: ${env:IMAGE_PROVIDER, 'openai'}
+    LLM_MODEL: ${env:LLM_MODEL, 'gpt-4o-mini'}
+    LLM_PROVIDER: ${env:LLM_PROVIDER, 'openai'}
+    # --- vars: Agent behavior ---
+    AGENT_MAX_STEPS: ${env:AGENT_MAX_STEPS, '3'}
+    MAX_OUTPUT_TOKENS: ${env:MAX_OUTPUT_TOKENS, '4096'}
+    RESPONSE_LANGUAGE: ${env:RESPONSE_LANGUAGE, 'ko'}
+    # --- vars: Slack UX ---
+    BOT_CURSOR: ${env:BOT_CURSOR, ':robot_face:'}
+    MAX_LEN_SLACK: ${env:MAX_LEN_SLACK, '3000'}
+    SYSTEM_MESSAGE: ${env:SYSTEM_MESSAGE, ''}
+    # --- vars: Access control / throttle ---
+    ALLOWED_CHANNEL_IDS: ${env:ALLOWED_CHANNEL_IDS, ''}
+    ALLOWED_CHANNEL_MESSAGE: ${env:ALLOWED_CHANNEL_MESSAGE, ''}
+    MAX_THROTTLE_COUNT: ${env:MAX_THROTTLE_COUNT, '100'}
+    # --- vars: Storage ---
+    MAX_HISTORY_CHARS: ${env:MAX_HISTORY_CHARS, '4000'}
+    # --- vars: Observability ---
+    LOG_LEVEL: ${env:LOG_LEVEL, 'INFO'}
+    # --- vars: Document / time ---
+    DEFAULT_TIMEZONE: ${env:DEFAULT_TIMEZONE, 'Asia/Seoul'}
+    MAX_DOC_BYTES: ${env:MAX_DOC_BYTES, '26214400'}
+    MAX_DOC_CHARS: ${env:MAX_DOC_CHARS, '20000'}
+    MAX_DOC_PAGES: ${env:MAX_DOC_PAGES, '50'}
+    # --- vars: Web fetch ---
+    JINA_READER_BASE: ${env:JINA_READER_BASE, 'https://r.jina.ai'}
+    MAX_WEB_BYTES: ${env:MAX_WEB_BYTES, '2097152'}
+    MAX_WEB_CHARS: ${env:MAX_WEB_CHARS, '8000'}
+    MAX_WEB_LINKS: ${env:MAX_WEB_LINKS, '20'}
   iam:
     role:
       statements:

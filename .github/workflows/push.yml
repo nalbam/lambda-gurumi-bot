@@ -49,32 +49,43 @@ jobs:
 
       - name: Deploy to AWS Lambda 🚀
         env:
+          # --- secrets: Slack ---
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
+          # --- secrets: LLM provider keys ---
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          # --- secrets: Web search ---
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
-          LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
-          LLM_MODEL: ${{ vars.LLM_MODEL }}
-          IMAGE_PROVIDER: ${{ vars.IMAGE_PROVIDER }}
+          # --- vars: LLM / Image ---
           IMAGE_MODEL: ${{ vars.IMAGE_MODEL }}
-          RESPONSE_LANGUAGE: ${{ vars.RESPONSE_LANGUAGE }}
+          IMAGE_PROVIDER: ${{ vars.IMAGE_PROVIDER }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
+          # --- vars: Agent behavior ---
           AGENT_MAX_STEPS: ${{ vars.AGENT_MAX_STEPS }}
           MAX_OUTPUT_TOKENS: ${{ vars.MAX_OUTPUT_TOKENS }}
-          MAX_LEN_SLACK: ${{ vars.MAX_LEN_SLACK }}
-          MAX_THROTTLE_COUNT: ${{ vars.MAX_THROTTLE_COUNT }}
-          MAX_HISTORY_CHARS: ${{ vars.MAX_HISTORY_CHARS }}
+          RESPONSE_LANGUAGE: ${{ vars.RESPONSE_LANGUAGE }}
+          # --- vars: Slack UX ---
           BOT_CURSOR: ${{ vars.BOT_CURSOR }}
+          MAX_LEN_SLACK: ${{ vars.MAX_LEN_SLACK }}
+          SYSTEM_MESSAGE: ${{ vars.SYSTEM_MESSAGE }}
+          # --- vars: Access control / throttle ---
           ALLOWED_CHANNEL_IDS: ${{ vars.ALLOWED_CHANNEL_IDS }}
           ALLOWED_CHANNEL_MESSAGE: ${{ vars.ALLOWED_CHANNEL_MESSAGE }}
-          SYSTEM_MESSAGE: ${{ vars.SYSTEM_MESSAGE }}
+          MAX_THROTTLE_COUNT: ${{ vars.MAX_THROTTLE_COUNT }}
+          # --- vars: Storage ---
+          MAX_HISTORY_CHARS: ${{ vars.MAX_HISTORY_CHARS }}
+          # --- vars: Observability ---
           LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+          # --- vars: Document / time ---
           DEFAULT_TIMEZONE: ${{ vars.DEFAULT_TIMEZONE }}
+          MAX_DOC_BYTES: ${{ vars.MAX_DOC_BYTES }}
           MAX_DOC_CHARS: ${{ vars.MAX_DOC_CHARS }}
           MAX_DOC_PAGES: ${{ vars.MAX_DOC_PAGES }}
-          MAX_DOC_BYTES: ${{ vars.MAX_DOC_BYTES }}
-          MAX_WEB_CHARS: ${{ vars.MAX_WEB_CHARS }}
-          MAX_WEB_BYTES: ${{ vars.MAX_WEB_BYTES }}
-          MAX_WEB_LINKS: ${{ vars.MAX_WEB_LINKS }}
+          # --- vars: Web fetch ---
           JINA_READER_BASE: ${{ vars.JINA_READER_BASE }}
+          MAX_WEB_BYTES: ${{ vars.MAX_WEB_BYTES }}
+          MAX_WEB_CHARS: ${{ vars.MAX_WEB_CHARS }}
+          MAX_WEB_LINKS: ${{ vars.MAX_WEB_LINKS }}
         run: npx serverless deploy --stage dev --region us-east-1
