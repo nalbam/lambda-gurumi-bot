@@ -10,11 +10,10 @@ from src.tools import (
     ToolExecutor,
     ToolRegistry,
     default_registry,
-    fetch_thread_history,
-    generate_image,
-    read_attached_images,
-    search_web,
 )
+from src.tools.slack import fetch_thread_history, read_attached_images
+from src.tools.image import generate_image
+from src.tools.search import search_web
 
 
 def _settings(**overrides) -> Settings:
@@ -90,7 +89,7 @@ def test_executor_timeout_guards_slow_tools():
     def slow(ctx):
         time.sleep(1.0)
 
-    from src.tools import ToolDef
+    from src.tools.registry import ToolDef
 
     registry.register(ToolDef(name="slow", description="", parameters={"type": "object", "properties": {}}, fn=slow))
     executor = ToolExecutor(_ctx(), registry, timeout=0.1)
@@ -113,7 +112,7 @@ def test_executor_wraps_boto_client_error():
             "InvokeModel",
         )
 
-    from src.tools import ToolDef
+    from src.tools.registry import ToolDef
 
     registry.register(
         ToolDef(
@@ -135,7 +134,7 @@ def test_executor_captures_tool_error():
     def boom(ctx):
         raise ValueError("nope")
 
-    from src.tools import ToolDef
+    from src.tools.registry import ToolDef
 
     registry.register(ToolDef(name="boom", description="", parameters={"type": "object", "properties": {}}, fn=boom))
     executor = ToolExecutor(_ctx(), registry)
@@ -154,7 +153,7 @@ def test_executor_per_tool_timeout_override():
         time.sleep(0.3)
         return "done"
 
-    from src.tools import ToolDef
+    from src.tools.registry import ToolDef
 
     registry.register(
         ToolDef(
@@ -207,7 +206,7 @@ def test_read_attached_images_accepts_slack_host_variants():
     llm = MagicMock()
     llm.describe_image.return_value = "a cat"
     ctx = _ctx(event=event, llm=llm)
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools.slack.urllib.request.urlopen") as opener:
         opener.return_value.__enter__.return_value.read.return_value = b"fake"
         result = read_attached_images(ctx, limit=1)
     assert result == [{"name": "a", "summary": "a cat"}]
@@ -293,7 +292,7 @@ def test_read_attached_images_accepts_extra_urls():
     be loadable via read_attached_images(urls=[...])."""
     ctx = _ctx()
     ctx.llm.describe_image.return_value = "a cat history"
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools.slack.urllib.request.urlopen") as opener:
         opener.return_value.__enter__.return_value.read.return_value = b"fake-bytes"
         out = read_attached_images(
             ctx,
@@ -321,7 +320,7 @@ def test_read_attached_images_respects_total_limit_across_event_and_urls():
     }
     ctx = _ctx(event=event)
     ctx.llm.describe_image.return_value = "desc"
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools.slack.urllib.request.urlopen") as opener:
         opener.return_value.__enter__.return_value.read.return_value = b"x"
         out = read_attached_images(
             ctx,
@@ -347,7 +346,7 @@ def test_search_web_ddg_parses_results():
         "AbstractText": "abstract",
         "RelatedTopics": [{"Text": "t1", "FirstURL": "https://example.com/1"}],
     }
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools.search.urllib.request.urlopen") as opener:
         opener.return_value.__enter__.return_value.read.return_value = json.dumps(payload).encode()
         results = search_web(ctx, query="q", limit=5)
     assert results[0]["url"] == "https://example.com/a"
@@ -364,7 +363,7 @@ def test_search_web_uses_tavily_when_key_set():
         llm=MagicMock(),
     )
     payload = {"results": [{"title": "t", "url": "https://x", "content": "c"}]}
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools.search.urllib.request.urlopen") as opener:
         opener.return_value.__enter__.return_value.read.return_value = json.dumps(payload).encode()
         out = search_web(ctx, query="q", limit=5)
     assert out == [{"title": "t", "url": "https://x", "content": "c"}]
@@ -392,7 +391,7 @@ def test_generate_image_returns_permalink():
 
 
 def test_get_current_time_uses_default_timezone():
-    from src.tools import get_current_time
+    from src.tools.time import get_current_time
 
     ctx = _ctx()  # _settings() default_timezone defaults to Asia/Seoul
     out = get_current_time(ctx)
@@ -407,7 +406,7 @@ def test_get_current_time_uses_default_timezone():
 
 
 def test_get_current_time_respects_custom_timezone():
-    from src.tools import get_current_time
+    from src.tools.time import get_current_time
 
     ctx = _ctx()
     out = get_current_time(ctx, timezone="UTC")
@@ -434,7 +433,7 @@ def test_get_current_time_invalid_tz_via_executor():
 
 
 def test_read_attached_document_text_file():
-    from src.tools import read_attached_document
+    from src.tools.slack import read_attached_document
 
     event = {
         "files": [
@@ -447,7 +446,7 @@ def test_read_attached_document_text_file():
     }
     ctx = _ctx(event=event)
     body = b"Hello\n  world.\nLine 3."
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools.slack.urllib.request.urlopen") as opener:
         resp = opener.return_value.__enter__.return_value
         resp.read.return_value = body
         resp.headers = {"Content-Length": str(len(body))}
@@ -496,7 +495,7 @@ def _mock_pdf_response(opener, body: bytes, headers=None):
 
 
 def test_read_attached_document_pdf_happy_path():
-    from src.tools import read_attached_document
+    from src.tools.slack import read_attached_document
 
     pdf = _build_pdf_bytes(["Hello PDF page one.", "Page two here."])
     event = {
@@ -509,7 +508,7 @@ def test_read_attached_document_pdf_happy_path():
         ]
     }
     ctx = _ctx(event=event)
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools.slack.urllib.request.urlopen") as opener:
         _mock_pdf_response(opener, pdf)
         out = read_attached_document(ctx, limit=1)
     assert len(out) == 1
@@ -521,7 +520,7 @@ def test_read_attached_document_pdf_happy_path():
 
 
 def test_read_attached_document_pdf_truncation():
-    from src.tools import read_attached_document
+    from src.tools.slack import read_attached_document
 
     pdf = _build_pdf_bytes(["A" * 500])
     event = {
@@ -544,7 +543,7 @@ def test_read_attached_document_pdf_truncation():
         settings=_settings(max_doc_chars=50),
         llm=ctx.llm,
     )
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools.slack.urllib.request.urlopen") as opener:
         _mock_pdf_response(opener, pdf)
         out = read_attached_document(ctx, limit=1)
     assert out[0]["truncated"] is True
@@ -552,7 +551,7 @@ def test_read_attached_document_pdf_truncation():
 
 
 def test_read_attached_document_page_cap():
-    from src.tools import read_attached_document
+    from src.tools.slack import read_attached_document
 
     pdf = _build_pdf_bytes(["p1", "p2", "p3"])
     event = {
@@ -572,7 +571,7 @@ def test_read_attached_document_page_cap():
         settings=_settings(max_doc_pages=2),
         llm=MagicMock(),
     )
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools.slack.urllib.request.urlopen") as opener:
         _mock_pdf_response(opener, pdf)
         out = read_attached_document(ctx, limit=1)
     assert "error" in out[0]
@@ -580,7 +579,7 @@ def test_read_attached_document_page_cap():
 
 
 def test_read_attached_document_size_cap_via_content_length():
-    from src.tools import read_attached_document
+    from src.tools.slack import read_attached_document
 
     event = {
         "files": [
@@ -599,7 +598,7 @@ def test_read_attached_document_size_cap_via_content_length():
         settings=_settings(max_doc_bytes=100),  # tiny cap
         llm=MagicMock(),
     )
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools.slack.urllib.request.urlopen") as opener:
         resp = opener.return_value.__enter__.return_value
         resp.headers = {"Content-Length": "200"}  # > cap
         resp.read.return_value = b"x" * 10  # should never be read past cap
@@ -609,7 +608,7 @@ def test_read_attached_document_size_cap_via_content_length():
 
 
 def test_read_attached_document_size_cap_via_streamed_read():
-    from src.tools import read_attached_document
+    from src.tools.slack import read_attached_document
 
     event = {
         "files": [
@@ -629,7 +628,7 @@ def test_read_attached_document_size_cap_via_streamed_read():
         llm=MagicMock(),
     )
     body = b"y" * 200
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools.slack.urllib.request.urlopen") as opener:
         resp = opener.return_value.__enter__.return_value
         resp.headers = {}  # no Content-Length
         buf = {"pos": 0}
@@ -650,7 +649,7 @@ def test_read_attached_document_size_cap_via_streamed_read():
 
 
 def test_read_attached_document_rejects_non_slack_host():
-    from src.tools import read_attached_document
+    from src.tools.slack import read_attached_document
 
     ctx = _ctx()
     out = read_attached_document(
@@ -662,7 +661,7 @@ def test_read_attached_document_rejects_non_slack_host():
 
 
 def test_read_attached_document_skips_encrypted_pdf():
-    from src.tools import read_attached_document
+    from src.tools.slack import read_attached_document
     from io import BytesIO
     from pypdf import PdfWriter
 
@@ -685,7 +684,7 @@ def test_read_attached_document_skips_encrypted_pdf():
         ]
     }
     ctx = _ctx(event=event)
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools.slack.urllib.request.urlopen") as opener:
         _mock_pdf_response(opener, encrypted_pdf)
         out = read_attached_document(ctx, limit=1)
     assert "error" in out[0]
@@ -693,7 +692,7 @@ def test_read_attached_document_skips_encrypted_pdf():
 
 
 def test_read_attached_document_skips_image_mime():
-    from src.tools import read_attached_document
+    from src.tools.slack import read_attached_document
 
     event = {
         "files": [
@@ -706,14 +705,14 @@ def test_read_attached_document_skips_image_mime():
     }
     ctx = _ctx(event=event)
     # urlopen should NOT be called — image MIMEs are filtered before fetch
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools.slack.urllib.request.urlopen") as opener:
         out = read_attached_document(ctx, limit=1)
     opener.assert_not_called()
     assert out == []
 
 
 def test_read_attached_document_http_error_returns_per_item():
-    from src.tools import read_attached_document
+    from src.tools.slack import read_attached_document
     import urllib.error
 
     event = {
@@ -726,7 +725,7 @@ def test_read_attached_document_http_error_returns_per_item():
         ]
     }
     ctx = _ctx(event=event)
-    with patch("src.tools.urllib.request.urlopen") as opener:
+    with patch("src.tools.slack.urllib.request.urlopen") as opener:
         opener.side_effect = urllib.error.HTTPError(
             url="https://files.slack.com/missing.pdf",
             code=404,
@@ -746,56 +745,56 @@ def test_read_attached_document_http_error_returns_per_item():
 
 
 def test_validate_public_https_url_rejects_http_scheme():
-    from src.tools import _validate_public_https_url
+    from src.tools.web import _validate_public_https_url
 
     with pytest.raises(ValueError, match="https"):
         _validate_public_https_url("http://example.com/")
 
 
 def test_validate_public_https_url_rejects_ip_literal_v4():
-    from src.tools import _validate_public_https_url
+    from src.tools.web import _validate_public_https_url
 
     with pytest.raises(ValueError, match="IP literals"):
         _validate_public_https_url("https://127.0.0.1/")
 
 
 def test_validate_public_https_url_rejects_ip_literal_v6():
-    from src.tools import _validate_public_https_url
+    from src.tools.web import _validate_public_https_url
 
     with pytest.raises(ValueError, match="IP literals"):
         _validate_public_https_url("https://[::1]/")
 
 
 def test_validate_public_https_url_rejects_private_dns(monkeypatch):
-    from src.tools import _validate_public_https_url
+    from src.tools.web import _validate_public_https_url
 
     def fake_getaddrinfo(host, port, family=0, type=0, *args, **kwargs):
         # Simulate DNS pointing at RFC1918 space.
         return [(None, None, None, "", ("10.0.0.1", port))]
 
-    monkeypatch.setattr("src.tools_web.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("src.tools.web.socket.getaddrinfo", fake_getaddrinfo)
     with pytest.raises(ValueError, match="non-public"):
         _validate_public_https_url("https://internal.corp.example/")
 
 
 def test_validate_public_https_url_rejects_metadata_host(monkeypatch):
-    from src.tools import _validate_public_https_url
+    from src.tools.web import _validate_public_https_url
 
     def fake_getaddrinfo(host, port, family=0, type=0, *args, **kwargs):
         return [(None, None, None, "", ("169.254.169.254", port))]
 
-    monkeypatch.setattr("src.tools_web.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("src.tools.web.socket.getaddrinfo", fake_getaddrinfo)
     with pytest.raises(ValueError, match="non-public"):
         _validate_public_https_url("https://cloud.metadata.example/")
 
 
 def test_validate_public_https_url_accepts_public_host(monkeypatch):
-    from src.tools import _validate_public_https_url
+    from src.tools.web import _validate_public_https_url
 
     def fake_getaddrinfo(host, port, family=0, type=0, *args, **kwargs):
         return [(None, None, None, "", ("93.184.216.34", port))]  # example.com
 
-    monkeypatch.setattr("src.tools_web.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("src.tools.web.socket.getaddrinfo", fake_getaddrinfo)
     scheme, host = _validate_public_https_url("https://example.com/path")
     assert scheme == "https"
     assert host == "example.com"
@@ -804,12 +803,12 @@ def test_validate_public_https_url_accepts_public_host(monkeypatch):
 def test_validate_public_https_url_dns_failure(monkeypatch):
     import socket as _socket
 
-    from src.tools import _validate_public_https_url
+    from src.tools.web import _validate_public_https_url
 
     def fake_getaddrinfo(host, port, family=0, type=0, *args, **kwargs):
         raise _socket.gaierror("nodename nor servname provided")
 
-    monkeypatch.setattr("src.tools_web.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("src.tools.web.socket.getaddrinfo", fake_getaddrinfo)
     with pytest.raises(ValueError, match="DNS resolution failed"):
         _validate_public_https_url("https://nonexistent.invalid.example/")
 
@@ -818,7 +817,7 @@ def test_no_redirect_handler_raises_on_302():
     import urllib.error
     import urllib.request
 
-    from src.tools import _NoRedirectHandler
+    from src.tools.web import _NoRedirectHandler
 
     handler = _NoRedirectHandler()
     req = urllib.request.Request("https://example.com/")
@@ -832,7 +831,7 @@ def test_no_redirect_handler_raises_on_302():
 
 
 def test_html_text_extractor_basic():
-    from src.tools import _HtmlTextExtractor
+    from src.tools.web import _HtmlTextExtractor
 
     html = (
         "<html><head><title>  Hello </title></head>"
@@ -865,7 +864,7 @@ def test_html_text_extractor_basic():
 
 
 def test_filter_links_drops_non_https_and_dedups():
-    from src.tools import _filter_links
+    from src.tools.web import _filter_links
 
     raw = [
         ("A", "https://a.example/1"),
@@ -883,7 +882,7 @@ def test_filter_links_drops_non_https_and_dedups():
 
 
 def test_filter_links_respects_limit():
-    from src.tools import _filter_links
+    from src.tools.web import _filter_links
 
     raw = [(f"T{i}", f"https://x.example/{i}") for i in range(5)]
     out = _filter_links(raw, base_url="https://base.example/", limit=3)
@@ -896,7 +895,7 @@ def test_filter_links_respects_limit():
 
 
 def test_extract_markdown_links_parses_inline_markdown():
-    from src.tools import _extract_markdown_links
+    from src.tools.web import _extract_markdown_links
 
     md = (
         "Title\n\nSome prose with [Google](https://google.com/about) "
@@ -911,7 +910,7 @@ def test_extract_markdown_links_parses_inline_markdown():
 
 
 def test_parse_jina_response_strips_header():
-    from src.tools import _parse_jina_response
+    from src.tools.web import _parse_jina_response
 
     payload = (
         "Title: Example Page\n"
@@ -926,7 +925,7 @@ def test_parse_jina_response_strips_header():
 
 
 def test_parse_jina_response_no_header():
-    from src.tools import _parse_jina_response
+    from src.tools.web import _parse_jina_response
 
     payload = "just raw markdown\n\nwith no prefix"
     title, body = _parse_jina_response(payload)
@@ -935,7 +934,7 @@ def test_parse_jina_response_no_header():
 
 
 def test_html_text_extractor_empty():
-    from src.tools import _HtmlTextExtractor
+    from src.tools.web import _HtmlTextExtractor
 
     x = _HtmlTextExtractor("https://base.example/")
     x.feed("")
@@ -945,7 +944,7 @@ def test_html_text_extractor_empty():
 
 
 def test_filter_links_host_case_normalization():
-    from src.tools import _filter_links
+    from src.tools.web import _filter_links
 
     out = _filter_links(
         [
@@ -961,7 +960,7 @@ def test_filter_links_host_case_normalization():
 
 
 def test_extract_markdown_links_skips_images():
-    from src.tools import _extract_markdown_links
+    from src.tools.web import _extract_markdown_links
 
     md = (
         "![logo](https://img.example/logo.png) "
@@ -974,7 +973,7 @@ def test_extract_markdown_links_skips_images():
 
 
 def test_extract_markdown_links_preserves_paren_in_url():
-    from src.tools import _extract_markdown_links
+    from src.tools.web import _extract_markdown_links
 
     md = "see [Wiki](https://en.wikipedia.org/wiki/Foo_(bar)) for context"
     out = _extract_markdown_links(md, base_url="https://base.example/", limit=10)
@@ -983,7 +982,7 @@ def test_extract_markdown_links_preserves_paren_in_url():
 
 
 def test_parse_jina_response_inline_markdown_content():
-    from src.tools import _parse_jina_response
+    from src.tools.web import _parse_jina_response
 
     payload = "Title: T\nURL Source: https://example.com/\nMarkdown Content: # Heading\n\nBody here."
     title, body = _parse_jina_response(payload)
@@ -1014,10 +1013,10 @@ def _streamed_read(body: bytes):
 
 
 def test_jina_fetch_returns_body_under_cap():
-    from src.tools import _jina_fetch
+    from src.tools.web import _jina_fetch
 
     payload = b"Title: x\nURL Source: https://example.com/\n\nBody here."
-    with patch("src.tools_web.urllib.request.urlopen") as opener:
+    with patch("src.tools.web.urllib.request.urlopen") as opener:
         resp = opener.return_value.__enter__.return_value
         resp.headers = {"Content-Length": str(len(payload)), "Content-Type": "text/markdown"}
         resp.read.side_effect = _streamed_read(payload)
@@ -1026,9 +1025,9 @@ def test_jina_fetch_returns_body_under_cap():
 
 
 def test_jina_fetch_content_length_over_cap():
-    from src.tools import _jina_fetch
+    from src.tools.web import _jina_fetch
 
-    with patch("src.tools_web.urllib.request.urlopen") as opener:
+    with patch("src.tools.web.urllib.request.urlopen") as opener:
         resp = opener.return_value.__enter__.return_value
         resp.headers = {"Content-Length": "999999"}
         resp.read.side_effect = _streamed_read(b"x" * 10)
@@ -1037,10 +1036,10 @@ def test_jina_fetch_content_length_over_cap():
 
 
 def test_jina_fetch_streamed_over_cap():
-    from src.tools import _jina_fetch
+    from src.tools.web import _jina_fetch
 
     body = b"x" * 2000
-    with patch("src.tools_web.urllib.request.urlopen") as opener:
+    with patch("src.tools.web.urllib.request.urlopen") as opener:
         resp = opener.return_value.__enter__.return_value
         resp.headers = {}  # no Content-Length
         resp.read.side_effect = _streamed_read(body)
@@ -1049,7 +1048,7 @@ def test_jina_fetch_streamed_over_cap():
 
 
 def test_raw_fetch_returns_body_under_cap(monkeypatch):
-    from src.tools import _raw_fetch
+    from src.tools.web import _raw_fetch
 
     body = b"<html><title>Hi</title><body>hello</body></html>"
 
@@ -1059,21 +1058,21 @@ def test_raw_fetch_returns_body_under_cap(monkeypatch):
     cm = fake_opener.open.return_value.__enter__.return_value
     cm.headers = {"Content-Length": str(len(body)), "Content-Type": "text/html"}
     cm.read.side_effect = _streamed_read(body)
-    monkeypatch.setattr("src.tools_web.urllib.request.build_opener", lambda *_: fake_opener)
+    monkeypatch.setattr("src.tools.web.urllib.request.build_opener", lambda *_: fake_opener)
 
     html = _raw_fetch("https://example.com/", max_bytes=1024)
     assert "hello" in html
 
 
 def test_raw_fetch_streamed_over_cap(monkeypatch):
-    from src.tools import _raw_fetch
+    from src.tools.web import _raw_fetch
 
     body = b"a" * 4096
     fake_opener = MagicMock()
     cm = fake_opener.open.return_value.__enter__.return_value
     cm.headers = {}
     cm.read.side_effect = _streamed_read(body)
-    monkeypatch.setattr("src.tools_web.urllib.request.build_opener", lambda *_: fake_opener)
+    monkeypatch.setattr("src.tools.web.urllib.request.build_opener", lambda *_: fake_opener)
     with pytest.raises(ValueError, match="MAX_WEB_BYTES"):
         _raw_fetch("https://example.com/", max_bytes=1024)
 
@@ -1084,12 +1083,12 @@ def test_raw_fetch_streamed_over_cap(monkeypatch):
 
 
 def _public_dns(monkeypatch):
-    """Route all src.tools_web.socket.getaddrinfo lookups to a public IP."""
+    """Route all src.tools.web.socket.getaddrinfo lookups to a public IP."""
 
     def _public(host, port, family=0, type=0, *args, **kwargs):
         return [(None, None, None, "", ("93.184.216.34", port))]
 
-    monkeypatch.setattr("src.tools_web.socket.getaddrinfo", _public)
+    monkeypatch.setattr("src.tools.web.socket.getaddrinfo", _public)
 
 
 def test_default_registry_now_includes_fetch_webpage():
@@ -1098,7 +1097,7 @@ def test_default_registry_now_includes_fetch_webpage():
 
 
 def test_fetch_webpage_rejects_http_via_tool(monkeypatch):
-    from src.tools import fetch_webpage
+    from src.tools.web import fetch_webpage
 
     ctx = _ctx()
     with pytest.raises(ValueError, match="https"):
@@ -1106,7 +1105,7 @@ def test_fetch_webpage_rejects_http_via_tool(monkeypatch):
 
 
 def test_fetch_webpage_jina_happy_path(monkeypatch):
-    from src.tools import fetch_webpage
+    from src.tools.web import fetch_webpage
 
     _public_dns(monkeypatch)
     jina_body = (
@@ -1116,7 +1115,7 @@ def test_fetch_webpage_jina_happy_path(monkeypatch):
         b"# Hello\n\nSee [Docs](https://docs.example.com/) and [Blog](https://blog.example.com/).\n"
     )
     ctx = _ctx()
-    with patch("src.tools_web.urllib.request.urlopen") as opener:
+    with patch("src.tools.web.urllib.request.urlopen") as opener:
         resp = opener.return_value.__enter__.return_value
         resp.headers = {"Content-Length": str(len(jina_body))}
         resp.read.side_effect = _streamed_read(jina_body)
@@ -1132,7 +1131,7 @@ def test_fetch_webpage_jina_happy_path(monkeypatch):
 
 
 def test_fetch_webpage_falls_back_to_raw_on_jina_5xx(monkeypatch):
-    from src.tools import fetch_webpage
+    from src.tools.web import fetch_webpage
     import urllib.error
 
     _public_dns(monkeypatch)
@@ -1152,8 +1151,8 @@ def test_fetch_webpage_falls_back_to_raw_on_jina_5xx(monkeypatch):
     cm.headers = {"Content-Length": str(len(html_body))}
     cm.read.side_effect = _streamed_read(html_body)
 
-    monkeypatch.setattr("src.tools_web.urllib.request.urlopen", jina_fail)
-    monkeypatch.setattr("src.tools_web.urllib.request.build_opener", lambda *_: fake_opener)
+    monkeypatch.setattr("src.tools.web.urllib.request.urlopen", jina_fail)
+    monkeypatch.setattr("src.tools.web.urllib.request.build_opener", lambda *_: fake_opener)
 
     ctx = _ctx()
     out = fetch_webpage(ctx, url="https://example.com/")
@@ -1165,7 +1164,7 @@ def test_fetch_webpage_falls_back_to_raw_on_jina_5xx(monkeypatch):
 
 def test_fetch_webpage_jina_body_over_cap_falls_back_to_raw(monkeypatch):
     """Jina oversize → fall through to raw fetch instead of raising."""
-    from src.tools import fetch_webpage
+    from src.tools.web import fetch_webpage
 
     _public_dns(monkeypatch)
     settings = Settings(
@@ -1201,11 +1200,11 @@ def test_fetch_webpage_jina_body_over_cap_falls_back_to_raw(monkeypatch):
     cm.headers = {"Content-Length": str(len(raw_html))}
     cm.read.side_effect = _streamed_read(raw_html)
 
-    with patch("src.tools_web.urllib.request.urlopen") as jina_open:
+    with patch("src.tools.web.urllib.request.urlopen") as jina_open:
         jresp = jina_open.return_value.__enter__.return_value
         jresp.headers = {}  # no Content-Length → streamed-read path
         jresp.read.side_effect = _streamed_read(huge_jina)
-        monkeypatch_build = patch("src.tools_web.urllib.request.build_opener", lambda *_: fake_opener)
+        monkeypatch_build = patch("src.tools.web.urllib.request.build_opener", lambda *_: fake_opener)
         with monkeypatch_build:
             out = fetch_webpage(ctx, url="https://example.com/")
     assert out["source"] == "raw"
@@ -1213,12 +1212,12 @@ def test_fetch_webpage_jina_body_over_cap_falls_back_to_raw(monkeypatch):
 
 
 def test_fetch_webpage_max_chars_truncates(monkeypatch):
-    from src.tools import fetch_webpage
+    from src.tools.web import fetch_webpage
 
     _public_dns(monkeypatch)
     long_body = b"Title: T\nURL Source: https://example.com/\nMarkdown Content:\n" + (b"A" * 500)
     ctx = _ctx()
-    with patch("src.tools_web.urllib.request.urlopen") as opener:
+    with patch("src.tools.web.urllib.request.urlopen") as opener:
         resp = opener.return_value.__enter__.return_value
         resp.headers = {"Content-Length": str(len(long_body))}
         resp.read.side_effect = _streamed_read(long_body)
@@ -1229,7 +1228,7 @@ def test_fetch_webpage_max_chars_truncates(monkeypatch):
 
 
 def test_fetch_webpage_both_paths_fail_raises(monkeypatch):
-    from src.tools import fetch_webpage
+    from src.tools.web import fetch_webpage
     import urllib.error
 
     _public_dns(monkeypatch)
@@ -1247,9 +1246,9 @@ def test_fetch_webpage_both_paths_fail_raises(monkeypatch):
     fake_opener = MagicMock()
     fake_opener.open.side_effect = raw_503
 
-    monkeypatch.setattr("src.tools_web.urllib.request.urlopen", jina_500)
+    monkeypatch.setattr("src.tools.web.urllib.request.urlopen", jina_500)
     monkeypatch.setattr(
-        "src.tools_web.urllib.request.build_opener", lambda *_: fake_opener
+        "src.tools.web.urllib.request.build_opener", lambda *_: fake_opener
     )
 
     ctx = _ctx()
@@ -1258,7 +1257,7 @@ def test_fetch_webpage_both_paths_fail_raises(monkeypatch):
 
 
 def test_fetch_webpage_max_links_dedup(monkeypatch):
-    from src.tools import fetch_webpage
+    from src.tools.web import fetch_webpage
 
     _public_dns(monkeypatch)
     link_section = (
@@ -1275,7 +1274,7 @@ def test_fetch_webpage_max_links_dedup(monkeypatch):
         "Title: T\nURL Source: https://example.com/\nMarkdown Content:\n" + link_section
     ).encode()
     ctx = _ctx()
-    with patch("src.tools_web.urllib.request.urlopen") as opener:
+    with patch("src.tools.web.urllib.request.urlopen") as opener:
         resp = opener.return_value.__enter__.return_value
         resp.headers = {"Content-Length": str(len(payload))}
         resp.read.side_effect = _streamed_read(payload)
