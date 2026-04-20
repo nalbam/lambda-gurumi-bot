@@ -97,6 +97,10 @@ class Settings:
     max_doc_chars: int = 20_000
     max_doc_pages: int = 50
     max_doc_bytes: int = 25 * 1024 * 1024
+    max_web_chars: int = 8000
+    max_web_bytes: int = 2 * 1024 * 1024
+    max_web_links: int = 20
+    jina_reader_base: str = "https://r.jina.ai"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -136,6 +140,11 @@ class Settings:
             max_doc_chars=_int_env("MAX_DOC_CHARS", 20_000, minimum=1000),
             max_doc_pages=_int_env("MAX_DOC_PAGES", 50, minimum=1),
             max_doc_bytes=_int_env("MAX_DOC_BYTES", 25 * 1024 * 1024, minimum=64 * 1024),
+            max_web_chars=_int_env("MAX_WEB_CHARS", 8000, minimum=500),
+            max_web_bytes=_int_env("MAX_WEB_BYTES", 2 * 1024 * 1024, minimum=64 * 1024),
+            max_web_links=_int_env("MAX_WEB_LINKS", 20, minimum=0),
+            jina_reader_base=(os.getenv("JINA_READER_BASE", "https://r.jina.ai").strip()
+                              or "https://r.jina.ai"),
         )
 
     def require_slack_credentials(self) -> None:

@@ -21,6 +21,7 @@ def _clear_env(monkeypatch):
         "ALLOWED_CHANNEL_MESSAGE", "MAX_LEN_SLACK", "MAX_THROTTLE_COUNT",
         "MAX_HISTORY_CHARS", "BOT_CURSOR", "SYSTEM_MESSAGE", "TAVILY_API_KEY", "XAI_API_KEY", "LOG_LEVEL",
         "DEFAULT_TIMEZONE", "MAX_DOC_CHARS", "MAX_DOC_PAGES", "MAX_DOC_BYTES",
+        "MAX_WEB_CHARS", "MAX_WEB_BYTES", "MAX_WEB_LINKS", "JINA_READER_BASE",
     ]:
         monkeypatch.delenv(key, raising=False)
 
@@ -144,3 +145,36 @@ def test_default_timezone_custom_value(monkeypatch, reload_config):
     monkeypatch.setenv("DEFAULT_TIMEZONE", "America/New_York")
     s = reload_config()
     assert s.default_timezone == "America/New_York"
+
+
+def test_web_fetch_defaults(monkeypatch, reload_config):
+    _clear_env(monkeypatch)
+    for key in ["MAX_WEB_CHARS", "MAX_WEB_BYTES", "MAX_WEB_LINKS", "JINA_READER_BASE"]:
+        monkeypatch.delenv(key, raising=False)
+    s = reload_config()
+    assert s.max_web_chars == 8000
+    assert s.max_web_bytes == 2 * 1024 * 1024
+    assert s.max_web_links == 20
+    assert s.jina_reader_base == "https://r.jina.ai"
+
+
+def test_web_fetch_env_overrides(monkeypatch, reload_config):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("MAX_WEB_CHARS", "1000")
+    monkeypatch.setenv("MAX_WEB_BYTES", "131072")  # 128KB
+    monkeypatch.setenv("MAX_WEB_LINKS", "5")
+    monkeypatch.setenv("JINA_READER_BASE", "https://custom.reader.example")
+    s = reload_config()
+    assert s.max_web_chars == 1000
+    assert s.max_web_bytes == 131072
+    assert s.max_web_links == 5
+    assert s.jina_reader_base == "https://custom.reader.example"
+
+
+def test_web_fetch_below_minimum_clamped(monkeypatch, reload_config):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("MAX_WEB_CHARS", "10")      # below 500 floor
+    monkeypatch.setenv("MAX_WEB_BYTES", "1024")    # below 64KB floor
+    s = reload_config()
+    assert s.max_web_chars == 500
+    assert s.max_web_bytes == 64 * 1024
