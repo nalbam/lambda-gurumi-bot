@@ -73,6 +73,55 @@ def test_user_name_cache_falls_back_to_user_id_on_error():
     assert cache.get(client, "U2") == "U2"
 
 
+def test_user_name_cache_warm_resolves_misses_in_parallel():
+    """warm() must hit users_info once per uncached id and run them
+    concurrently — the original serial pattern blew the tool timeout
+    when many new users appeared in a thread."""
+    import threading
+    import time as _time
+
+    cache = UserNameCache._default()
+    client = MagicMock()
+
+    in_flight = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def _slow_users_info(user):
+        nonlocal in_flight, peak
+        with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        _time.sleep(0.2)
+        with lock:
+            in_flight -= 1
+        return {"user": {"profile": {"display_name": f"name-{user}"}}}
+
+    client.users_info.side_effect = _slow_users_info
+
+    started = _time.monotonic()
+    cache.warm(client, ["U1", "U2", "U3", "U4"])
+    elapsed = _time.monotonic() - started
+
+    assert peak >= 2, f"expected concurrent users_info, peak={peak}"
+    assert elapsed < 0.6, f"expected parallel ~0.2s, took {elapsed:.2f}s"
+    assert cache.get(client, "U1") == "name-U1"
+    # warm populated the cache, so get() does not trigger a second API call
+    assert client.users_info.call_count == 4
+
+
+def test_user_name_cache_warm_skips_cached_and_empty_ids():
+    cache = UserNameCache._default()
+    client = MagicMock()
+    client.users_info.return_value = {"user": {"profile": {"display_name": "Alice"}}}
+    cache.get(client, "U1")  # prime cache
+    client.users_info.reset_mock()
+
+    cache.warm(client, ["U1", "", None, "U1"])  # all already-cached or skippable
+
+    client.users_info.assert_not_called()
+
+
 def test_channel_allowed_no_allowlist():
     assert channel_allowed("C1", []) is True
 

@@ -121,6 +121,51 @@ def test_fetch_thread_history_resolves_user_files_and_reactions():
     ]
 
 
+def test_fetch_thread_history_resolves_users_concurrently():
+    """fetch_thread_history must prefetch user names in parallel via
+    UserNameCache.warm. Without this, a thread of N unique users + R
+    reacters becomes N+R serial users_info calls and blows the tool
+    timeout on cold caches."""
+    import threading
+    import time as _time
+
+    from src.slack_helpers import user_name_cache
+
+    user_name_cache._cache.clear()
+
+    in_flight = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def _slow_users_info(user):
+        nonlocal in_flight, peak
+        with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        _time.sleep(0.2)
+        with lock:
+            in_flight -= 1
+        return {"user": {"profile": {"display_name": f"name-{user}"}}}
+
+    client = MagicMock()
+    client.users_info.side_effect = _slow_users_info
+    client.conversations_replies.return_value = {
+        "messages": [
+            {"user": f"U{i}", "text": "hi", "ts": f"100.{i}"}
+            for i in range(4)
+        ]
+    }
+
+    started = _time.monotonic()
+    out = fetch_thread_history(_ctx(slack_client=client), limit=10)
+    elapsed = _time.monotonic() - started
+
+    assert len(out) == 4
+    assert peak >= 2, f"expected concurrent users_info, peak={peak}"
+    assert elapsed < 0.6, f"expected parallel ~0.2s, took {elapsed:.2f}s"
+    assert {item["user"] for item in out} == {f"name-U{i}" for i in range(4)}
+
+
 def test_read_attached_images_accepts_extra_urls():
     """Images referenced from fetch_thread_history (url_private_download) must
     be loadable via read_attached_images(urls=[...])."""
@@ -140,6 +185,100 @@ def test_read_attached_images_urls_reject_non_slack_host():
     ctx = _ctx()
     with pytest.raises(ValueError):
         read_attached_images(ctx, urls=["https://evil.example.com/cat.png"])
+
+
+def test_read_attached_images_runs_describes_in_parallel():
+    """The describe step is the slow one (LLM call). Three images that each
+    take 0.3s to describe should finish in well under the serial 0.9s if the
+    pool is actually parallel. Guards against accidentally re-serializing the
+    fetch loop (the original bug)."""
+    import threading
+    import time as _time
+
+    event = {
+        "files": [
+            {
+                "mimetype": "image/png",
+                "url_private_download": f"https://files.slack.com/img{i}.png",
+                "name": f"img{i}.png",
+            }
+            for i in range(3)
+        ]
+    }
+    ctx = _ctx(event=event)
+
+    in_flight = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def _slow_describe(_data, _mime):
+        nonlocal in_flight, peak
+        with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        _time.sleep(0.3)
+        with lock:
+            in_flight -= 1
+        return "described"
+
+    ctx.llm.describe_image.side_effect = _slow_describe
+
+    with patch("src.tools.slack.urllib.request.urlopen") as opener:
+        opener.return_value.__enter__.return_value.read.return_value = b"x"
+        started = _time.monotonic()
+        out = read_attached_images(ctx, limit=3)
+        elapsed = _time.monotonic() - started
+
+    assert len(out) == 3
+    assert peak >= 2, f"expected concurrent describes, peak={peak}"
+    assert elapsed < 0.7, f"expected parallel ~0.3s, took {elapsed:.2f}s"
+
+
+def test_read_attached_images_preserves_order():
+    """Output order must match candidate order (event files first, then urls),
+    independent of which describe call finishes first."""
+    import threading
+    import time as _time
+
+    event = {
+        "files": [
+            {
+                "mimetype": "image/png",
+                "url_private_download": "https://files.slack.com/event.png",
+                "name": "event.png",
+            }
+        ]
+    }
+    ctx = _ctx(event=event)
+
+    delays = {b"event": 0.2, b"extra": 0.0}
+    barrier = threading.Event()
+
+    def _describe(data, _mime):
+        # Force the extra image to finish first so we can verify ordering
+        # comes from the candidate index, not completion order.
+        _time.sleep(delays.get(data, 0.0))
+        if data == b"extra":
+            barrier.set()
+        return f"sum-{data.decode()}"
+
+    ctx.llm.describe_image.side_effect = _describe
+
+    def _open(req, timeout=15):  # noqa: ARG001
+        url = req.full_url if hasattr(req, "full_url") else req
+        body = b"event" if "event.png" in url else b"extra"
+        cm = MagicMock()
+        cm.__enter__.return_value.read.return_value = body
+        return cm
+
+    with patch("src.tools.slack.urllib.request.urlopen", side_effect=_open):
+        out = read_attached_images(
+            ctx,
+            limit=3,
+            urls=["https://files.slack.com/extra.png"],
+        )
+
+    assert [item["name"] for item in out] == ["event.png", "extra.png"]
 
 
 def test_read_attached_images_respects_total_limit_across_event_and_urls():
@@ -171,6 +310,87 @@ def test_read_attached_images_respects_total_limit_across_event_and_urls():
 # --------------------------------------------------------------------------- #
 # read_attached_document
 # --------------------------------------------------------------------------- #
+
+
+def test_read_attached_document_runs_in_parallel():
+    """Multiple text documents should download concurrently. The serial
+    implementation took ~3 * download_time; parallel should finish in
+    roughly download_time. Guards against re-serializing the loop."""
+    import threading
+    import time as _time
+
+    event = {
+        "files": [
+            {
+                "mimetype": "text/plain",
+                "url_private_download": f"https://files.slack.com/d{i}.txt",
+                "name": f"d{i}.txt",
+            }
+            for i in range(3)
+        ]
+    }
+    ctx = _ctx(event=event)
+
+    in_flight = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def _slow_open(_req, timeout=15):  # noqa: ARG001
+        nonlocal in_flight, peak
+        with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        _time.sleep(0.3)
+        with lock:
+            in_flight -= 1
+        cm = MagicMock()
+        cm.__enter__.return_value.read.return_value = b"hello"
+        cm.__enter__.return_value.headers = {"Content-Length": "5", "Content-Type": "text/plain"}
+        return cm
+
+    with patch("src.tools.slack.urllib.request.urlopen", side_effect=_slow_open):
+        started = _time.monotonic()
+        out = read_attached_document(ctx, limit=3)
+        elapsed = _time.monotonic() - started
+
+    assert len(out) == 3
+    assert peak >= 2, f"expected concurrent fetches, peak={peak}"
+    assert elapsed < 0.7, f"expected parallel ~0.3s, took {elapsed:.2f}s"
+
+
+def test_read_attached_document_preserves_order_under_parallel_completion():
+    """Output order must follow candidate order, not completion order."""
+    import time as _time
+
+    event = {
+        "files": [
+            {
+                "mimetype": "text/plain",
+                "url_private_download": "https://files.slack.com/slow.txt",
+                "name": "slow.txt",
+            },
+            {
+                "mimetype": "text/plain",
+                "url_private_download": "https://files.slack.com/fast.txt",
+                "name": "fast.txt",
+            },
+        ]
+    }
+    ctx = _ctx(event=event)
+
+    def _open(req, timeout=15):  # noqa: ARG001
+        url = req.full_url if hasattr(req, "full_url") else req
+        delay = 0.2 if "slow.txt" in url else 0.0
+        _time.sleep(delay)
+        cm = MagicMock()
+        cm.__enter__.return_value.read.return_value = b"x"
+        cm.__enter__.return_value.headers = {"Content-Length": "1", "Content-Type": "text/plain"}
+        return cm
+
+    with patch("src.tools.slack.urllib.request.urlopen", side_effect=_open):
+        out = read_attached_document(ctx, limit=2)
+
+    assert [item["name"] for item in out] == ["slow.txt", "fast.txt"]
 
 
 def test_read_attached_document_text_file():

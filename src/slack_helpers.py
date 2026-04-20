@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from slack_sdk.errors import SlackApiError
@@ -314,9 +316,15 @@ class StreamingMessage:
 
 @dataclass
 class UserNameCache:
-    """Module-level cache keyed by user_id. Survives warm starts."""
+    """Module-level cache keyed by user_id. Survives warm starts.
+
+    Thread-safe: `warm()` resolves cache misses in parallel threads, so
+    cache writes go through `_lock`. Reads are lock-free (a `dict.get`
+    on an existing key is GIL-atomic in CPython; a worst-case race just
+    causes a redundant `users_info` call, never a corrupt cache)."""
 
     _cache: dict[str, str]
+    _lock: threading.Lock = field(default_factory=threading.Lock)
 
     @classmethod
     def _default(cls) -> "UserNameCache":
@@ -325,8 +333,9 @@ class UserNameCache:
     def get(self, client: Any, user_id: str) -> str:
         if not user_id:
             return ""
-        if user_id in self._cache:
-            return self._cache[user_id]
+        cached = self._cache.get(user_id)
+        if cached is not None:
+            return cached
         try:
             info = client.users_info(user=user_id)
             profile = (info.get("user") or {}).get("profile") or {}
@@ -339,8 +348,22 @@ class UserNameCache:
         except SlackApiError as exc:
             logger.debug("users_info failed for %s: %s", user_id, exc)
             name = user_id
-        self._cache[user_id] = name
+        with self._lock:
+            self._cache[user_id] = name
         return name
+
+    def warm(self, client: Any, user_ids: Iterable[str]) -> None:
+        """Pre-resolve display names for the given user IDs in parallel.
+
+        Used by callers that know they'll need many user names before the
+        rendering loop starts (e.g. `fetch_thread_history`). Without this,
+        `get()` runs serially inside the loop and 50 cache misses become
+        50 sequential `users_info` calls, easily blowing the tool timeout."""
+        misses = list({uid for uid in user_ids if uid and uid not in self._cache})
+        if not misses:
+            return
+        with ThreadPoolExecutor(max_workers=min(len(misses), 8)) as pool:
+            list(pool.map(lambda uid: self.get(client, uid), misses))
 
 
 user_name_cache = UserNameCache._default()

@@ -7,6 +7,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
 from slack_sdk.errors import SlackApiError
@@ -42,6 +43,9 @@ DOC_PDF_MIME = "application/pdf"
         },
         "required": [],
     },
+    # Each image runs Slack download (15s) + LLM describe (multi-second) in
+    # parallel; the 60s ceiling is a generous safety net for limit=10.
+    timeout=60.0,
 )
 def read_attached_images(
     ctx: ToolContext,
@@ -49,43 +53,58 @@ def read_attached_images(
     urls: list[str] | None = None,
 ) -> list[dict[str, str]]:
     token = ctx.settings.slack_bot_token
-    out: list[dict[str, str]] = []
     seen: set[str] = set()
-
-    def _fetch(url: str, mime_hint: str, name: str) -> None:
-        if url in seen:
-            return
-        seen.add(url)
-        parsed = urllib.parse.urlparse(url)
-        if parsed.scheme != "https" or parsed.hostname not in SLACK_FILE_HOSTS:
-            raise ValueError("invalid Slack file download URL")
-        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-        with urllib.request.urlopen(req, timeout=15) as response:  # noqa: S310 (host allowlisted)
-            data = response.read()
-        mime = mime_hint if mime_hint.startswith("image/") else _guess_image_mime(url)
-        if not mime.startswith("image/"):
-            return
-        out.append({"name": name, "summary": ctx.llm.describe_image(data, mime)})
+    candidates: list[tuple[str, str, str]] = []  # (url, mime_hint, name)
 
     # 1) Images from the current mention event
     for file_info in (ctx.event.get("files") or [])[:limit]:
-        if len(out) >= limit:
+        if len(candidates) >= limit:
             break
         mime = str(file_info.get("mimetype", ""))
         if not mime.startswith("image/"):
             continue
         dl = file_info.get("url_private_download") or file_info.get("url_private")
-        if not dl:
+        if not dl or dl in seen:
             continue
-        _fetch(dl, mime, file_info.get("name", "image"))
+        seen.add(dl)
+        candidates.append((dl, mime, file_info.get("name", "image")))
 
     # 2) Extra URLs provided by the caller (typically from fetch_thread_history)
     for extra in (urls or []):
-        if len(out) >= limit:
+        if len(candidates) >= limit:
             break
-        _fetch(extra, "", _filename_from_url(extra))
+        if extra in seen:
+            continue
+        seen.add(extra)
+        candidates.append((extra, "", _filename_from_url(extra)))
 
-    return out
+    # Pre-flight SSRF check: validate every URL we plan to fetch BEFORE we
+    # spin up worker threads, so an invalid host raises synchronously like
+    # the previous serial implementation did.
+    for url, _, _ in candidates:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme != "https" or parsed.hostname not in SLACK_FILE_HOSTS:
+            raise ValueError("invalid Slack file download URL")
+
+    if not candidates:
+        return []
+
+    def _fetch(url: str, mime_hint: str, name: str) -> dict[str, str] | None:
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=15) as response:  # noqa: S310 (host allowlisted)
+            data = response.read()
+        mime = mime_hint if mime_hint.startswith("image/") else _guess_image_mime(url)
+        if not mime.startswith("image/"):
+            return None
+        return {"name": name, "summary": ctx.llm.describe_image(data, mime)}
+
+    results: list[dict[str, str] | None] = [None] * len(candidates)
+    with ThreadPoolExecutor(max_workers=min(len(candidates), 4)) as pool:
+        future_to_idx = {pool.submit(_fetch, *c): i for i, c in enumerate(candidates)}
+        for future in as_completed(future_to_idx):
+            results[future_to_idx[future]] = future.result()
+
+    return [r for r in results if r is not None]
 
 
 def _guess_image_mime(url: str) -> str:
@@ -205,7 +224,10 @@ def _parse_text(data: bytes, max_chars: int) -> tuple[str, bool]:
         },
         "required": [],
     },
-    timeout=30.0,
+    # Each document downloads from Slack (15s) and is parsed locally;
+    # parallelized below, but the 60s ceiling covers the worst case where
+    # max=5 documents all hit the download timeout.
+    timeout=60.0,
 )
 def read_attached_document(
     ctx: ToolContext,
@@ -215,25 +237,43 @@ def read_attached_document(
     token = ctx.settings.slack_bot_token
     max_bytes = ctx.settings.max_doc_bytes
     max_chars = ctx.settings.max_doc_chars
-    out: list[dict[str, Any]] = []
     seen: set[str] = set()
+    candidates: list[tuple[str, str, str]] = []  # (url, mime_hint, name)
 
     def _is_doc_mime(mime: str) -> bool:
         mime = (mime or "").lower()
         return mime == DOC_PDF_MIME or mime.startswith(DOC_TEXT_PREFIX)
 
-    def _process(url: str, file_mime_hint: str, name: str) -> None:
-        if url in seen or len(out) >= limit:
-            return
-        seen.add(url)
+    for file_info in (ctx.event.get("files") or [])[:limit]:
+        if len(candidates) >= limit:
+            break
+        mime = str(file_info.get("mimetype", ""))
+        if not _is_doc_mime(mime):
+            continue
+        dl = file_info.get("url_private_download") or file_info.get("url_private")
+        if not dl or dl in seen:
+            continue
+        seen.add(dl)
+        candidates.append((dl, mime, file_info.get("name", "document")))
+
+    for extra in (urls or []):
+        if len(candidates) >= limit:
+            break
+        if extra in seen:
+            continue
+        seen.add(extra)
+        candidates.append((extra, "", _filename_from_url(extra)))
+
+    if not candidates:
+        return []
+
+    def _process_one(url: str, file_mime_hint: str, name: str) -> dict[str, Any] | None:
         try:
             body, header_mime = _fetch_slack_file(url, token, max_bytes)
         except ValueError as exc:
-            out.append({"name": name, "error": str(exc)})
-            return
+            return {"name": name, "error": str(exc)}
         except urllib.error.HTTPError as exc:
-            out.append({"name": name, "error": f"HTTPError: {exc.code}"})
-            return
+            return {"name": name, "error": f"HTTPError: {exc.code}"}
         mime = (header_mime or file_mime_hint or "").lower()
         if mime == DOC_PDF_MIME:
             try:
@@ -241,51 +281,35 @@ def read_attached_document(
                     body, ctx.settings.max_doc_pages, max_chars
                 )
             except ValueError as exc:
-                out.append({"name": name, "error": str(exc)})
-                return
-            out.append(
-                {
-                    "name": name,
-                    "mimetype": DOC_PDF_MIME,
-                    "pages": pages,
-                    "chars": len(text),
-                    "truncated": truncated,
-                    "text": text,
-                }
-            )
-            return
+                return {"name": name, "error": str(exc)}
+            return {
+                "name": name,
+                "mimetype": DOC_PDF_MIME,
+                "pages": pages,
+                "chars": len(text),
+                "truncated": truncated,
+                "text": text,
+            }
         if mime.startswith(DOC_TEXT_PREFIX):
             text, truncated = _parse_text(body, max_chars)
-            out.append(
-                {
-                    "name": name,
-                    "mimetype": mime,
-                    "pages": 0,
-                    "chars": len(text),
-                    "truncated": truncated,
-                    "text": text,
-                }
-            )
-            return
+            return {
+                "name": name,
+                "mimetype": mime,
+                "pages": 0,
+                "chars": len(text),
+                "truncated": truncated,
+                "text": text,
+            }
         # non-doc mime: silently skip (images handled by read_attached_images)
+        return None
 
-    for file_info in (ctx.event.get("files") or [])[:limit]:
-        if len(out) >= limit:
-            break
-        mime = str(file_info.get("mimetype", ""))
-        if not _is_doc_mime(mime):
-            continue
-        dl = file_info.get("url_private_download") or file_info.get("url_private")
-        if not dl:
-            continue
-        _process(dl, mime, file_info.get("name", "document"))
+    results: list[dict[str, Any] | None] = [None] * len(candidates)
+    with ThreadPoolExecutor(max_workers=min(len(candidates), 4)) as pool:
+        future_to_idx = {pool.submit(_process_one, *c): i for i, c in enumerate(candidates)}
+        for future in as_completed(future_to_idx):
+            results[future_to_idx[future]] = future.result()
 
-    for extra in (urls or []):
-        if len(out) >= limit:
-            break
-        _process(extra, "", _filename_from_url(extra))
-
-    return out
+    return [r for r in results if r is not None]
 
 
 @tool(
@@ -303,12 +327,32 @@ def read_attached_document(
         "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}},
         "required": [],
     },
+    # conversations_replies + up to ~limit users_info lookups (parallelized
+    # via UserNameCache.warm). 30s leaves headroom for retry backoff.
+    timeout=30.0,
 )
 def fetch_thread_history(ctx: ToolContext, limit: int = 20) -> list[dict[str, Any]]:
     def _map(res: dict[str, Any]) -> list[dict[str, Any]]:
         client = ctx.slack_client
+        messages = res.get("messages", [])
+
+        # Resolve every author/reacter we'll need in parallel before the
+        # rendering loop. With a cold cache and limit=50 this would
+        # otherwise be 50+ serial users_info calls (the original timeout
+        # bug for read_attached_images, repeating itself here).
+        user_ids: set[str] = set()
+        for item in messages:
+            uid = item.get("user") or item.get("bot_id")
+            if uid:
+                user_ids.add(uid)
+            for r in item.get("reactions") or []:
+                for u in (r.get("users") or []):
+                    if u:
+                        user_ids.add(u)
+        user_name_cache.warm(client, user_ids)
+
         out: list[dict[str, Any]] = []
-        for item in res.get("messages", []):
+        for item in messages:
             user_id = item.get("user") or item.get("bot_id") or ""
             files = []
             for f in item.get("files") or []:
