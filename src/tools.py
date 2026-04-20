@@ -623,6 +623,7 @@ def _tavily_search(api_key: str, query: str, limit: int) -> list[dict[str, str]]
 
 
 _PUBLIC_WEB_UA = "lambda-gurumi-bot/1.0 (+https://github.com/nalbam/lambda-gurumi-bot)"
+_WEB_FETCH_TIMEOUT = 12  # Jina Reader + direct raw GET; capped shorter than Slack internal fetch (15s) because web targets have no retry budget inside the tool.
 
 
 def _validate_public_https_url(url: str) -> tuple[str, str]:
@@ -830,7 +831,7 @@ def _jina_fetch(base: str, target_url: str, max_bytes: int) -> str:
             "X-Return-Format": "markdown",
         },
     )
-    with urllib.request.urlopen(req, timeout=12) as response:  # noqa: S310 (URL built from validated base + percent-encoded target)
+    with urllib.request.urlopen(req, timeout=_WEB_FETCH_TIMEOUT) as response:  # noqa: S310 (URL built from validated base + percent-encoded target)
         body = _read_body_capped(response, max_bytes)
     return body.decode("utf-8", errors="replace")
 
@@ -843,7 +844,7 @@ def _raw_fetch(url: str, max_bytes: int) -> str:
     """
     opener = urllib.request.build_opener(_NoRedirectHandler())
     req = urllib.request.Request(url, headers={"User-Agent": _PUBLIC_WEB_UA})
-    with opener.open(req, timeout=12) as response:  # noqa: S310
+    with opener.open(req, timeout=_WEB_FETCH_TIMEOUT) as response:  # noqa: S310 (URL pre-validated by _validate_public_https_url; redirects disabled by _NoRedirectHandler)
         body = _read_body_capped(response, max_bytes)
     return body.decode("utf-8", errors="replace")
 
