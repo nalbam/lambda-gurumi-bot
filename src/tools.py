@@ -649,6 +649,8 @@ def _validate_public_https_url(url: str) -> tuple[str, str]:
         infos = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
         raise ValueError(f"DNS resolution failed: {exc}") from exc
+    if not infos:
+        raise ValueError("DNS resolution returned no addresses")
     for info in infos:
         addr = ipaddress.ip_address(info[4][0])
         if (
@@ -658,6 +660,7 @@ def _validate_public_https_url(url: str) -> tuple[str, str]:
             or addr.is_reserved
             or addr.is_multicast
             or addr.is_unspecified
+            or not addr.is_global
         ):
             raise ValueError("hostname resolves to non-public address")
     return parsed.scheme, host

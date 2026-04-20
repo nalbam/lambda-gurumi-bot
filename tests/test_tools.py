@@ -769,7 +769,7 @@ def test_validate_public_https_url_rejects_ip_literal_v6():
 def test_validate_public_https_url_rejects_private_dns(monkeypatch):
     from src.tools import _validate_public_https_url
 
-    def fake_getaddrinfo(host, port, type=None, *args, **kwargs):
+    def fake_getaddrinfo(host, port, family=0, type=0, *args, **kwargs):
         # Simulate DNS pointing at RFC1918 space.
         return [(None, None, None, "", ("10.0.0.1", port))]
 
@@ -781,7 +781,7 @@ def test_validate_public_https_url_rejects_private_dns(monkeypatch):
 def test_validate_public_https_url_rejects_metadata_host(monkeypatch):
     from src.tools import _validate_public_https_url
 
-    def fake_getaddrinfo(host, port, type=None, *args, **kwargs):
+    def fake_getaddrinfo(host, port, family=0, type=0, *args, **kwargs):
         return [(None, None, None, "", ("169.254.169.254", port))]
 
     monkeypatch.setattr("src.tools.socket.getaddrinfo", fake_getaddrinfo)
@@ -792,13 +792,26 @@ def test_validate_public_https_url_rejects_metadata_host(monkeypatch):
 def test_validate_public_https_url_accepts_public_host(monkeypatch):
     from src.tools import _validate_public_https_url
 
-    def fake_getaddrinfo(host, port, type=None, *args, **kwargs):
+    def fake_getaddrinfo(host, port, family=0, type=0, *args, **kwargs):
         return [(None, None, None, "", ("93.184.216.34", port))]  # example.com
 
     monkeypatch.setattr("src.tools.socket.getaddrinfo", fake_getaddrinfo)
     scheme, host = _validate_public_https_url("https://example.com/path")
     assert scheme == "https"
     assert host == "example.com"
+
+
+def test_validate_public_https_url_dns_failure(monkeypatch):
+    import socket as _socket
+
+    from src.tools import _validate_public_https_url
+
+    def fake_getaddrinfo(host, port, family=0, type=0, *args, **kwargs):
+        raise _socket.gaierror("nodename nor servname provided")
+
+    monkeypatch.setattr("src.tools.socket.getaddrinfo", fake_getaddrinfo)
+    with pytest.raises(ValueError, match="DNS resolution failed"):
+        _validate_public_https_url("https://nonexistent.invalid.example/")
 
 
 def test_no_redirect_handler_raises_on_302():
@@ -809,5 +822,5 @@ def test_no_redirect_handler_raises_on_302():
 
     handler = _NoRedirectHandler()
     req = urllib.request.Request("https://example.com/")
-    with pytest.raises(urllib.error.HTTPError):
+    with pytest.raises(urllib.error.HTTPError, match="redirects not allowed"):
         handler.redirect_request(req, None, 302, "Found", {}, "https://evil.example/")
