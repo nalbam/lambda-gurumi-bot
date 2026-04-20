@@ -69,4 +69,12 @@ jobs:
           ALLOWED_CHANNEL_MESSAGE: ${{ vars.ALLOWED_CHANNEL_MESSAGE }}
           SYSTEM_MESSAGE: ${{ vars.SYSTEM_MESSAGE }}
           LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+          DEFAULT_TIMEZONE: ${{ vars.DEFAULT_TIMEZONE }}
+          MAX_DOC_CHARS: ${{ vars.MAX_DOC_CHARS }}
+          MAX_DOC_PAGES: ${{ vars.MAX_DOC_PAGES }}
+          MAX_DOC_BYTES: ${{ vars.MAX_DOC_BYTES }}
+          MAX_WEB_CHARS: ${{ vars.MAX_WEB_CHARS }}
+          MAX_WEB_BYTES: ${{ vars.MAX_WEB_BYTES }}
+          MAX_WEB_LINKS: ${{ vars.MAX_WEB_LINKS }}
+          JINA_READER_BASE: ${{ vars.JINA_READER_BASE }}
         run: npx serverless deploy --stage dev --region us-east-1
