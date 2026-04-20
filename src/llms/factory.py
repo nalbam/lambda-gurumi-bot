@@ -1,7 +1,6 @@
-"""get_llm — select provider(s) from Settings."""
+"""get_llm — build an LLM provider from explicit parameters."""
 from __future__ import annotations
 
-from src.config import Settings
 from src.llms.base import LLMProvider
 from src.llms.bedrock import BedrockProvider
 from src.llms.composite import _CompositeProvider

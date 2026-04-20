@@ -1,8 +1,9 @@
 """OpenAIProvider — default OpenAI endpoint with vision and gpt-image-1."""
 from __future__ import annotations
 
-from src.llms.openai_wire import _OpenAICompatProvider, _is_new_gen_openai
 from typing import Any
+
+from src.llms.openai_wire import _OpenAICompatProvider, _is_new_gen_openai
 
 
 class OpenAIProvider(_OpenAICompatProvider):
