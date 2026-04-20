@@ -1,6 +1,7 @@
 """Tests for src.llms.xai."""
 from __future__ import annotations
 
+import base64
 import json
 from unittest.mock import MagicMock, patch
 
@@ -79,12 +80,10 @@ def test_xai_generate_image_skips_size_and_requests_b64():
     """xAI images.generate rejects `size` (uses aspect_ratio/resolution).
     We must omit it and explicitly ask for b64_json so we can decode bytes
     into files_upload_v2."""
-    import base64 as _b64
-
     provider = XAIProvider(model="grok-4-1-fast-reasoning", image_model="grok-imagine-image", api_key="x")
     provider._client = MagicMock()
     response = MagicMock()
-    response.data = [MagicMock(b64_json=_b64.b64encode(b"xai-bytes").decode())]
+    response.data = [MagicMock(b64_json=base64.b64encode(b"xai-bytes").decode())]
     provider._client.images.generate.return_value = response
 
     assert provider.generate_image("a cat") == b"xai-bytes"
