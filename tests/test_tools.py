@@ -932,3 +932,61 @@ def test_parse_jina_response_no_header():
     title, body = _parse_jina_response(payload)
     assert title == ""
     assert body == payload
+
+
+def test_html_text_extractor_empty():
+    from src.tools import _HtmlTextExtractor
+
+    x = _HtmlTextExtractor("https://base.example/")
+    x.feed("")
+    assert x.title() == ""
+    assert x.text() == ""
+    assert x.links == []
+
+
+def test_filter_links_host_case_normalization():
+    from src.tools import _filter_links
+
+    out = _filter_links(
+        [
+            ("A", "https://Example.COM/path"),
+            ("B", "https://example.com/path"),   # dup by host case
+            ("Self", "https://BASE.EXAMPLE/page"),  # self-ref by host case
+        ],
+        base_url="https://base.example/page",
+        limit=10,
+    )
+    urls = [item["url"] for item in out]
+    assert urls == ["https://Example.COM/path"]  # first-seen wins, case preserved in output
+
+
+def test_extract_markdown_links_skips_images():
+    from src.tools import _extract_markdown_links
+
+    md = (
+        "![logo](https://img.example/logo.png) "
+        "see [Docs](https://docs.example/) for more"
+    )
+    out = _extract_markdown_links(md, base_url="https://base.example/", limit=10)
+    urls = [item["url"] for item in out]
+    assert "https://img.example/logo.png" not in urls
+    assert "https://docs.example/" in urls
+
+
+def test_extract_markdown_links_preserves_paren_in_url():
+    from src.tools import _extract_markdown_links
+
+    md = "see [Wiki](https://en.wikipedia.org/wiki/Foo_(bar)) for context"
+    out = _extract_markdown_links(md, base_url="https://base.example/", limit=10)
+    urls = [item["url"] for item in out]
+    assert "https://en.wikipedia.org/wiki/Foo_(bar)" in urls
+
+
+def test_parse_jina_response_inline_markdown_content():
+    from src.tools import _parse_jina_response
+
+    payload = "Title: T\nURL Source: https://example.com/\nMarkdown Content: # Heading\n\nBody here."
+    title, body = _parse_jina_response(payload)
+    assert title == "T"
+    assert body.startswith("# Heading")
+    assert "Body here." in body

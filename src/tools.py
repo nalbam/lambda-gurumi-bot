@@ -681,7 +681,10 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         )
 
 
-_JINA_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+_JINA_LINK_RE = re.compile(
+    r"(?<!!)\[([^\]]+)\]\((https?://[^\s()]*(?:\([^\s)]*\))?[^\s)]*)\)"
+)
+_JINA_HEADER_MAX_LINES = 10
 
 
 class _HtmlTextExtractor(HTMLParser):
@@ -714,6 +717,9 @@ class _HtmlTextExtractor(HTMLParser):
             self._in_title = True
             return
         if tag == "a":
+            # Nested <a>: the inner link overwrites the outer one. Matches
+            # how HTML5 parsers implicitly close an unclosed <a>; the outer
+            # link is lost but the inner (usually more specific) is kept.
             href = dict(attrs).get("href")
             if href:
                 self._current_link_url = urllib.parse.urljoin(self._base_url, href)
@@ -760,6 +766,12 @@ def _filter_links(
 ) -> list[dict[str, str]]:
     if limit <= 0:
         return []
+    base_parsed = urllib.parse.urlparse(base_url)
+    base_key = base_parsed._replace(
+        scheme=base_parsed.scheme.lower(),
+        netloc=base_parsed.netloc.lower(),
+        fragment="",
+    ).geturl()
     seen: set[str] = set()
     out: list[dict[str, str]] = []
     for text, url in raw:
@@ -768,12 +780,17 @@ def _filter_links(
         parsed = urllib.parse.urlparse(url)
         if not parsed.netloc:
             continue
-        key = url.split("#", 1)[0]
-        if key == base_url.split("#", 1)[0]:
+        # Normalize host case for comparison (scheme+host are case-insensitive)
+        normalized = parsed._replace(
+            scheme=parsed.scheme.lower(),
+            netloc=parsed.netloc.lower(),
+            fragment="",
+        ).geturl()
+        if normalized == base_key:
             continue
-        if key in seen:
+        if normalized in seen:
             continue
-        seen.add(key)
+        seen.add(normalized)
         out.append({"title": (text or url).strip(), "url": url})
         if len(out) >= limit:
             break
@@ -795,13 +812,18 @@ def _parse_jina_response(text: str) -> tuple[str, str]:
     all_lines = text.split("\n")
     title = ""
     body_start = 0
-    for i, line in enumerate(all_lines[:10]):
+    for i, line in enumerate(all_lines[:_JINA_HEADER_MAX_LINES]):
         if line.startswith("Title: "):
             title = line[len("Title: "):].strip()
             body_start = max(body_start, i + 1)
         elif line.startswith("URL Source: "):
             body_start = max(body_start, i + 1)
         elif line.startswith("Markdown Content:"):
+            inline = line[len("Markdown Content:"):].strip()
+            if inline:
+                # inline content on same line as the marker: keep it
+                body_lines = [inline] + all_lines[i + 1:]
+                return title, "\n".join(body_lines).lstrip("\n")
             body_start = i + 1
             break
     if body_start == 0:
