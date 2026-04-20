@@ -99,7 +99,7 @@ def main() -> None:
 
     from src.agent import SlackMentionAgent
     from src.config import Settings
-    from src.llm import get_llm
+    from src.llms import get_llm
     from src.tools import ToolContext, default_registry
 
     settings = Settings.from_env()

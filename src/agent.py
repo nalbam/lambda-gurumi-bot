@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from src.llm import LLMProvider, ToolCall
+from src.llms import LLMProvider, ToolCall
 from src.logging_utils import log_event
 from src.tools import ToolContext, ToolExecutor, ToolRegistry
 

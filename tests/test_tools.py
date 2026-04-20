@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.config import Settings
-from src.llm import ToolCall
+from src.llms import ToolCall
 from src.tools import (
     ToolContext,
     ToolExecutor,

@@ -1,7 +1,10 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from src.llm import BedrockProvider, OpenAIProvider, ToolCall, XAIProvider, get_llm
+from src.llms import ToolCall, get_llm
+from src.llms.bedrock import BedrockProvider
+from src.llms.openai import OpenAIProvider
+from src.llms.xai import XAIProvider
 
 
 # --------------------------------------------------------------------------- #
@@ -512,7 +515,7 @@ def test_openai_generate_image_dalle_sends_response_format():
 
 
 def test_composite_provider_routes_image_to_image_llm():
-    from src.llm import _CompositeProvider
+    from src.llms.composite import _CompositeProvider
 
     text = MagicMock()
     image = MagicMock()
@@ -633,7 +636,7 @@ def test_get_llm_builds_xai_provider():
 
 def test_get_llm_composite_xai_text_openai_image():
     """Mixed-provider setups still work through _CompositeProvider."""
-    from src.llm import _CompositeProvider
+    from src.llms.composite import _CompositeProvider
 
     provider = get_llm(
         provider="xai",

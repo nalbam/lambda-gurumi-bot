@@ -22,7 +22,7 @@ from slack_bolt.adapter.aws_lambda import SlackRequestHandler
 from src.agent import SlackMentionAgent
 from src.config import Settings
 from src.dedup import ConversationStore, DedupStore
-from src.llm import get_llm
+from src.llms import get_llm
 from src.logging_utils import get_logger, log_event, set_request_id
 from src.slack_helpers import (
     MessageFormatter,

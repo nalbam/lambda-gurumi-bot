@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock
 
 from src.agent import SlackMentionAgent
-from src.llm import LLMResult, ToolCall
+from src.llms import LLMResult, ToolCall
 from src.tools import ToolContext, ToolRegistry, tool
 
 

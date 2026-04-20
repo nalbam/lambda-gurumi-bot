@@ -22,7 +22,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from slack_sdk.errors import SlackApiError
 
 from src.config import Settings
-from src.llm import LLMProvider, ToolCall
+from src.llms import LLMProvider, ToolCall
 from src.slack_helpers import user_name_cache
 
 # Re-export web-fetch helpers so callers (and tests that still import from
