@@ -1,14 +1,12 @@
 """Tests for src.tools.web."""
 from __future__ import annotations
 
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tests.tools._helpers import _ctx, _settings, _streamed_read
 from src.config import Settings
-from src.llms import ToolCall
 from src.tools.registry import ToolContext, ToolExecutor
 from src.tools.web import (
     _HtmlTextExtractor,

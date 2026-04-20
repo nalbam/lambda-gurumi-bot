@@ -1,12 +1,7 @@
 """Tests for src.tools.registry."""
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
-
-import pytest
-
-from tests.tools._helpers import _ctx, _settings, _streamed_read
+from tests.tools._helpers import _ctx
 from src.llms import ToolCall
 from src.tools import default_registry
 from src.tools.registry import ToolDef, ToolExecutor, ToolRegistry

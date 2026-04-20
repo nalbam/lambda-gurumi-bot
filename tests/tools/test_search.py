@@ -4,9 +4,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from tests.tools._helpers import _ctx, _settings, _streamed_read
+from tests.tools._helpers import _ctx, _settings
 from src.tools.registry import ToolContext
 from src.tools.search import search_web
 
