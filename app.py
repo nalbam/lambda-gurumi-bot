@@ -143,6 +143,13 @@ def _process(event: dict, client, say, is_dm: bool) -> None:  # noqa: ANN001
     thread_ts = event.get("thread_ts") or event.get("ts")
     user = event.get("user", "")
 
+    # Drop empty mentions (bare "@bot" with no prompt) BEFORE reserving a
+    # dedup slot. Otherwise every empty ping burns a 1h TTL row on the
+    # dedup table and, for no-op messages, shows up as a dedup.skip on any
+    # Slack retry even though there was never anything to do.
+    if not text:
+        return
+
     dedup = _get_dedup()
     dedup_key = event.get("client_msg_id") or f"{channel}:{event.get('ts')}"
     try:
@@ -152,7 +159,12 @@ def _process(event: dict, client, say, is_dm: bool) -> None:  # noqa: ANN001
     except Exception as exc:  # noqa: BLE001
         logger.warning("dedup unavailable, proceeding without it: %s", exc)
 
-    if not channel_allowed(channel, settings.allowed_channel_ids):
+    # Channel allowlist applies to public/private channels only. DMs use
+    # per-channel IDs (D-prefix) that aren't normally enrolled in the
+    # allowlist — enforcing there would lock out every user's direct-message
+    # path the moment an operator sets ALLOWED_CHANNEL_IDS. Slack's own
+    # workspace install permission already gates who can open the DM.
+    if not is_dm and not channel_allowed(channel, settings.allowed_channel_ids):
         msg = settings.allowed_channel_message or ""
         if msg:
             say(text=msg, thread_ts=thread_ts)
@@ -167,9 +179,6 @@ def _process(event: dict, client, say, is_dm: bool) -> None:  # noqa: ANN001
     if active >= settings.max_throttle_count:
         say(text=labels["throttled"], thread_ts=thread_ts)
         log_event(logger, "throttle.limit", user=user, active=active)
-        return
-
-    if not text:
         return
 
     # Show a typing-style status indicator while the bot is "working" with
