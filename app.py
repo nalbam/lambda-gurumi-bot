@@ -250,6 +250,7 @@ def _process(event: dict, client, say, is_dm: bool) -> None:  # noqa: ANN001
         max_steps=settings.agent_max_steps,
         response_language=settings.response_language,
         system_message=settings.system_message,
+        persona_message=settings.persona_message,
         history=history,
         on_stream=_on_stream_wrapped,
         on_step=_on_step,

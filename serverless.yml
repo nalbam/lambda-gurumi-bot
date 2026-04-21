@@ -45,6 +45,7 @@ provider:
     BOT_CURSOR: ${env:BOT_CURSOR, ':robot_face:'}
     MAX_LEN_SLACK: ${env:MAX_LEN_SLACK, '3000'}
     SYSTEM_MESSAGE: ${env:SYSTEM_MESSAGE, ''}
+    PERSONA_MESSAGE: ${env:PERSONA_MESSAGE, ''}
     # --- vars: Access control / throttle ---
     ALLOWED_CHANNEL_IDS: ${env:ALLOWED_CHANNEL_IDS, ''}
     ALLOWED_CHANNEL_MESSAGE: ${env:ALLOWED_CHANNEL_MESSAGE, ''}

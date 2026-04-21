@@ -70,6 +70,7 @@ jobs:
           BOT_CURSOR: ${{ vars.BOT_CURSOR }}
           MAX_LEN_SLACK: ${{ vars.MAX_LEN_SLACK }}
           SYSTEM_MESSAGE: ${{ vars.SYSTEM_MESSAGE }}
+          PERSONA_MESSAGE: ${{ vars.PERSONA_MESSAGE }}
           # --- vars: Access control / throttle ---
           ALLOWED_CHANNEL_IDS: ${{ vars.ALLOWED_CHANNEL_IDS }}
           ALLOWED_CHANNEL_MESSAGE: ${{ vars.ALLOWED_CHANNEL_MESSAGE }}

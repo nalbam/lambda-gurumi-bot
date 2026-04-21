@@ -40,6 +40,7 @@ class SlackMentionAgent:
         tool_executor: ToolExecutor | None = None,
         response_language: str = "ko",
         system_message: str | None = None,
+        persona_message: str | None = None,
         history: list[dict[str, Any]] | None = None,
         on_stream: Callable[[str], None] | None = None,
         on_step: Callable[[int, str, dict[str, Any]], None] | None = None,
@@ -55,6 +56,7 @@ class SlackMentionAgent:
         self._owns_executor = tool_executor is None
         self.response_language = response_language
         self.system_message = system_message
+        self.persona_message = persona_message
         self.history = history or []
         self.on_stream = on_stream
         # on_step(step_num, phase, detail) — phases: "tool_use", "tool_result", "compose"
@@ -158,19 +160,73 @@ class SlackMentionAgent:
     # ------------------------------------------------------------------ #
 
     def _build_system_prompt(self) -> str:
-        base = (
-            self.system_message
-            or "You are an assistant for Slack mention requests. Plan work, call tools when needed, and provide concise helpful answers."
+        """Assemble the system prompt from three layers:
+
+        1. Task rules (owned by code, always present) — how to plan, call
+           tools, render Slack replies, look up attachments.
+        2. Operator policy (`SYSTEM_MESSAGE`, optional) — extra organization
+           or channel-specific policy appended on top of task rules.
+        3. Persona (`PERSONA_MESSAGE`, optional) — answer style / tone.
+
+        The language directive is re-emphasized at the very end so the
+        model does not drift even if persona is in a different language.
+        """
+        # Layer 1 — task rules. Fixed in code so operators cannot accidentally
+        # delete the loop's planning / parallel-call / tool guidance by
+        # overriding SYSTEM_MESSAGE.
+        task_rules = (
+            "You are an assistant for Slack mention requests. Plan work, "
+            "call tools when needed, and provide concise helpful answers. "
+            "When multiple independent tools are required, emit their "
+            "tool_calls in parallel within a single turn instead of running "
+            "them one-by-one. If a tool returns `ok:false`, tell the user "
+            "briefly what failed (one short line) and, when it makes sense, "
+            "suggest an alternative — do not retry blindly with the same "
+            "arguments and do not fabricate a result."
         )
-        # Slack-specific rendering rules.
+        # Slack rendering rules. The streaming fallback path posts via plain
+        # chat.postMessage / chat.update with a `text` field, which Slack
+        # renders as mrkdwn — NOT GitHub markdown. Guide the model so replies
+        # don't surface raw `**bold**` or `[text](url)` strings.
         slack_rules = (
             "When you call the `generate_image` tool, the generated image is "
             "already uploaded inline into the Slack thread. Do NOT repeat the "
             "image URL or permalink in your text reply — just describe or "
             "caption the image briefly. The user sees the picture attached "
-            "directly; a URL line is duplicate noise."
+            "directly; a URL line is duplicate noise.\n"
+            "Slack renders mrkdwn, not GitHub markdown. Use `*bold*` with "
+            "single asterisks, `_italic_`, `` `code` ``, and "
+            "`<https://url|label>` for links. Do NOT use `**bold**` or "
+            "`[label](url)` — those appear as raw text in Slack."
         )
-        return f"{base}\n\n{slack_rules}\n\nRespond in language: {self.response_language}."
+        attachment_rules = (
+            "If the user asks about an image or document in the current "
+            "thread, call `read_attached_images` / `read_attached_document` "
+            "first — they target files attached to the triggering message. "
+            "If the result is an empty list, the attachment lives on an "
+            "earlier message: call `fetch_thread_history`, take the "
+            "`url_private_download` values from that message's `files`, "
+            "then call `read_attached_images(urls=[...])` or "
+            "`read_attached_document(urls=[...])` with them. When the user's "
+            "reference to a file is ambiguous (e.g. '이 사진', '아까 그 "
+            "파일'), call `read_attached_images` (or "
+            "`read_attached_document`) speculatively first — it returns an "
+            "empty list cheaply when no file is attached to the current "
+            "message, and that signals you to fall back to "
+            "`fetch_thread_history`. Never guess or fabricate file URLs."
+        )
+        sections = [task_rules, slack_rules, attachment_rules]
+
+        # Layer 2 — operator policy (optional, append).
+        if self.system_message:
+            sections.append(f"Additional policy:\n{self.system_message}")
+
+        # Layer 3 — persona / answer style (optional, append).
+        if self.persona_message:
+            sections.append(f"Response style:\n{self.persona_message}")
+
+        sections.append(f"Respond in language: {self.response_language}.")
+        return "\n\n".join(sections)
 
     @staticmethod
     def _call_signature(call: ToolCall) -> str:

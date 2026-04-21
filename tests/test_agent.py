@@ -287,6 +287,70 @@ def test_agent_does_not_close_injected_executor():
     ext_exec.close()
 
 
+def test_system_prompt_keeps_task_rules_even_when_system_message_set():
+    """SYSTEM_MESSAGE must NOT replace the task rules — it is appended as
+    additional policy so the agent's planning / tool / attachment guidance
+    always stays in the prompt."""
+    reg = _registry_with_search()
+    agent = SlackMentionAgent(
+        llm=MagicMock(),
+        context=_ctx(),
+        registry=reg,
+        max_steps=3,
+        system_message="Do not expose secrets.",
+        persona_message="자연스러운 한국어로 핵심부터 답한다.",
+    )
+    prompt = agent._build_system_prompt()
+    # Layer 1: task + slack + attachment rules are always present.
+    assert "Plan work, call tools when needed" in prompt
+    assert "in parallel within a single turn" in prompt
+    assert "generate_image" in prompt
+    assert "fetch_thread_history" in prompt
+    # Layer 2 / 3 labels present and carry the operator-supplied text.
+    assert "Additional policy:" in prompt
+    assert "Do not expose secrets." in prompt
+    assert "Response style:" in prompt
+    assert "자연스러운 한국어로 핵심부터 답한다." in prompt
+    # Language re-emphasis remains last.
+    assert prompt.rstrip().endswith("Respond in language: ko.")
+
+
+def test_system_prompt_includes_tier_s_guidance():
+    """The three Tier-S guidances must stay in the prompt:
+    (H1) Slack mrkdwn rendering, (H2) speculative attachment lookup on
+    ambiguous references, (H3) tool-failure response policy."""
+    reg = _registry_with_search()
+    agent = SlackMentionAgent(
+        llm=MagicMock(), context=_ctx(), registry=reg, max_steps=3
+    )
+    prompt = agent._build_system_prompt()
+    # H1: mrkdwn vs GitHub markdown guidance.
+    assert "mrkdwn" in prompt
+    assert "`*bold*`" in prompt
+    assert "`**bold**`" in prompt  # the anti-pattern is called out
+    assert "<https://url|label>" in prompt
+    # H2: speculative attachment call on ambiguous reference.
+    assert "speculatively" in prompt
+    assert "이 사진" in prompt
+    # H3: tool-failure policy.
+    assert "ok:false" in prompt
+    assert "do not retry blindly" in prompt
+    assert "do not fabricate" in prompt
+
+
+def test_system_prompt_omits_empty_optional_layers():
+    """When SYSTEM_MESSAGE / PERSONA_MESSAGE are unset, their labeled
+    blocks must not appear in the prompt."""
+    reg = _registry_with_search()
+    agent = SlackMentionAgent(
+        llm=MagicMock(), context=_ctx(), registry=reg, max_steps=3
+    )
+    prompt = agent._build_system_prompt()
+    assert "Additional policy:" not in prompt
+    assert "Response style:" not in prompt
+    assert "Plan work" in prompt
+
+
 def test_agent_aggregates_token_usage():
     reg = _registry_with_search()
     llm = ScriptedLLM(

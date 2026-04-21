@@ -73,7 +73,8 @@ Slack 멘션·DM 을 AWS Lambda 에서 처리하고, OpenAI · AWS Bedrock · xA
 | `MAX_WEB_LINKS` | | `20` | `fetch_webpage` 반환 링크 최대 개수 (≥0) |
 | `JINA_READER_BASE` | | `https://r.jina.ai` | `fetch_webpage` 가 호출하는 Jina Reader 베이스 URL. `https://` 가 아니면 기본값으로 폴백 |
 | `BOT_CURSOR` | | `:robot_face:` | 플레이스홀더·스트림 인디케이터 이모지 |
-| `SYSTEM_MESSAGE` | | — | 시스템 프롬프트 오버라이드 |
+| `SYSTEM_MESSAGE` | | — | 작업 규칙에 append 되는 추가 운영 정책 (예: 조직·채널 제약). base 를 덮어쓰지 않음 |
+| `PERSONA_MESSAGE` | | — | 답변 스타일/톤 (예: `"자연스러운 한국어로 핵심부터 답한다"`) |
 | `LOG_LEVEL` | | `INFO` | 로그 레벨 |
 
 ## 모델 매트릭스
@@ -127,7 +128,7 @@ aws iam attach-role-policy --role-name "${NAME}" --policy-arn "arn:aws:iam::${AC
 ### 2. GitHub 저장소 설정
 
 - **Secrets**: `AWS_ACCOUNT_ID`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `OPENAI_API_KEY`, `XAI_API_KEY`(xAI 사용 시), `TAVILY_API_KEY`(선택)
-- **Variables**: `LLM_PROVIDER`, `LLM_MODEL`, `IMAGE_PROVIDER`, `IMAGE_MODEL`, `RESPONSE_LANGUAGE`, `ALLOWED_CHANNEL_IDS`, `ALLOWED_CHANNEL_MESSAGE`, `SYSTEM_MESSAGE`, `BOT_CURSOR`, `MAX_LEN_SLACK`, `MAX_OUTPUT_TOKENS`, `MAX_THROTTLE_COUNT`, `MAX_HISTORY_CHARS`, `AGENT_MAX_STEPS`, `LOG_LEVEL`, `DEFAULT_TIMEZONE`, `MAX_DOC_CHARS`, `MAX_DOC_PAGES`, `MAX_DOC_BYTES`, `MAX_WEB_CHARS`, `MAX_WEB_BYTES`, `MAX_WEB_LINKS`, `JINA_READER_BASE`
+- **Variables**: `LLM_PROVIDER`, `LLM_MODEL`, `IMAGE_PROVIDER`, `IMAGE_MODEL`, `RESPONSE_LANGUAGE`, `ALLOWED_CHANNEL_IDS`, `ALLOWED_CHANNEL_MESSAGE`, `SYSTEM_MESSAGE`, `PERSONA_MESSAGE`, `BOT_CURSOR`, `MAX_LEN_SLACK`, `MAX_OUTPUT_TOKENS`, `MAX_THROTTLE_COUNT`, `MAX_HISTORY_CHARS`, `AGENT_MAX_STEPS`, `LOG_LEVEL`, `DEFAULT_TIMEZONE`, `MAX_DOC_CHARS`, `MAX_DOC_PAGES`, `MAX_DOC_BYTES`, `MAX_WEB_CHARS`, `MAX_WEB_BYTES`, `MAX_WEB_LINKS`, `JINA_READER_BASE`
 
 ### 3. 배포
 
