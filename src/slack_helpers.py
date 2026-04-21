@@ -129,6 +129,11 @@ class StreamingMessage:
     NATIVE_METHOD = "chat.startStream"
     APPEND_METHOD = "chat.appendStream"
     STOP_METHOD = "chat.stopStream"
+    # After this many consecutive chat_update failures on the fallback path,
+    # finalize the current ts and open a fresh chat_postMessage. Covers the
+    # case where the current ts is unreachable (deleted, rate-limited on a
+    # specific msg, etc.) without waiting for the buffer to hit max_len.
+    MAX_CONSECUTIVE_UPDATE_FAILURES = 3
 
     def __init__(
         self,
@@ -160,6 +165,7 @@ class StreamingMessage:
         self._last_flush = 0.0
         self._native = False  # True once chat.startStream succeeds
         self._stopped = False
+        self._consecutive_update_failures = 0
 
     # -- start ---------------------------------------------------------- #
 
@@ -237,12 +243,34 @@ class StreamingMessage:
             return
         try:
             self.client.chat_update(channel=self.channel, ts=self.ts, text=display)
+            self._consecutive_update_failures = 0
         except SlackApiError as exc:
-            logger.warning("chat_update during stream failed: %s", exc)
+            self._consecutive_update_failures += 1
+            logger.warning(
+                "chat_update during stream failed (%d consecutive): %s",
+                self._consecutive_update_failures,
+                exc,
+            )
+            # If updates keep failing on this ts (deleted, message-level rate
+            # limit, permission change), roll to a fresh message instead of
+            # burning cycles on the same broken ts until the buffer hits
+            # max_len. The accumulated buffer rides along into the new ts.
+            if self._consecutive_update_failures >= self.MAX_CONSECUTIVE_UPDATE_FAILURES:
+                self._consecutive_update_failures = 0
+                self._roll_to_new_message(preserve_buffer=True)
 
-    def _roll_to_new_message(self) -> None:
+    def _roll_to_new_message(self, preserve_buffer: bool = False) -> None:
         """Open a fresh placeholder message and reset the buffer. Used when
-        the fallback rolling update would overflow the per-message limit."""
+        the fallback rolling update would overflow the per-message limit,
+        or when repeated chat_update failures make the current ts unusable.
+
+        When `preserve_buffer` is True, the accumulated delta text is kept so
+        the next flush re-sends it against the new ts. This matters for the
+        consecutive-failure path: the deltas never reached Slack on the old
+        ts, so we can't just drop them. The size-overflow path passes
+        `preserve_buffer=False` because the old ts already received the full
+        buffer content via the `text=text` finalize update.
+        """
         try:
             res = self.client.chat_postMessage(
                 channel=self.channel,
@@ -250,7 +278,8 @@ class StreamingMessage:
                 text=self.placeholder,
             )
             self.ts = res.get("ts") if isinstance(res, dict) else res["ts"]
-            self._buffer = ""
+            if not preserve_buffer:
+                self._buffer = ""
         except SlackApiError as exc:
             logger.warning("roll-to-new-message failed: %s", exc)
 
@@ -379,9 +408,15 @@ def channel_allowed(channel: str, allowed_ids: list[str]) -> bool:
 def sanitize_error(exc: BaseException) -> str:
     """User-facing error text. Strips internal paths/tokens."""
     msg = str(exc) or exc.__class__.__name__
-    # Redact anything that looks like a Slack/OpenAI token.
+    # Redact tokens. Order matters: more specific patterns (sk-ant, sk-proj)
+    # run before the generic sk- pattern so the labels stay accurate.
     msg = re.sub(r"xox[abprs]-[A-Za-z0-9-]+", "[redacted-slack-token]", msg)
+    msg = re.sub(r"sk-ant-[A-Za-z0-9\-_]{10,}", "[redacted-anthropic-key]", msg)
     msg = re.sub(r"sk-[A-Za-z0-9\-_]{10,}", "[redacted-openai-key]", msg)
+    msg = re.sub(r"xai-[A-Za-z0-9\-_]{10,}", "[redacted-xai-key]", msg)
+    msg = re.sub(r"tvly-[A-Za-z0-9\-_]{10,}", "[redacted-tavily-key]", msg)
+    # AWS access keys: AKIA (long-term) / ASIA (temporary session).
+    msg = re.sub(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b", "[redacted-aws-key]", msg)
     # Truncate stack-like paths.
     msg = re.sub(r"(/[\w./-]+\.py)", "[path]", msg)
     if len(msg) > 300:

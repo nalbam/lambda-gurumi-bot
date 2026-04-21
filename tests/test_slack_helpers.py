@@ -157,6 +157,43 @@ def test_sanitize_error_truncates_long():
     assert len(out) <= 300
 
 
+def test_sanitize_error_redacts_anthropic_key():
+    exc = ValueError("failed: sk-ant-api03-abc123xyz456_-_deadbeef")
+    out = sanitize_error(exc)
+    assert "sk-ant-api03" not in out
+    assert "redacted-anthropic-key" in out
+    # Must not also match the generic openai key pattern (order matters).
+    assert "redacted-openai-key" not in out
+
+
+def test_sanitize_error_redacts_xai_key():
+    exc = ValueError("grok call failed with xai-abcdef1234567890xyz")
+    out = sanitize_error(exc)
+    assert "xai-abcdef" not in out
+    assert "redacted-xai-key" in out
+
+
+def test_sanitize_error_redacts_tavily_key():
+    exc = ValueError("tavily error: tvly-abcdefghij1234567890")
+    out = sanitize_error(exc)
+    assert "tvly-abcdef" not in out
+    assert "redacted-tavily-key" in out
+
+
+def test_sanitize_error_redacts_aws_access_key():
+    exc = ValueError("Boto3 failure for AKIAIOSFODNN7EXAMPLE in region")
+    out = sanitize_error(exc)
+    assert "AKIAIOSFODNN7EXAMPLE" not in out
+    assert "redacted-aws-key" in out
+
+
+def test_sanitize_error_redacts_aws_session_key():
+    exc = ValueError("temp creds ASIA123456789ABCDEF0 expired")
+    out = sanitize_error(exc)
+    assert "ASIA123456789ABCDEF0" not in out
+    assert "redacted-aws-key" in out
+
+
 # --------------------------------------------------------------------------- #
 # StreamingMessage
 # --------------------------------------------------------------------------- #
@@ -274,6 +311,63 @@ def test_streaming_message_fallback_rolls_when_buffer_exceeds_limit():
     assert sm._buffer == ""
     # chat_update was used to finalize the first message content before rolling.
     assert client.chat_update.called
+
+
+def test_streaming_message_rolls_after_consecutive_update_failures():
+    """If chat_update keeps failing on the current ts (deleted, permission,
+    message-level rate limit), the streamer must roll to a fresh ts instead
+    of looping forever. The accumulated buffer must be preserved so nothing
+    is lost."""
+    client = MagicMock()
+    client.api_call.side_effect = SlackApiError("no", {"error": "method_deprecated"})
+    client.chat_postMessage.side_effect = [
+        {"ok": True, "ts": "first"},
+        {"ok": True, "ts": "rolled"},
+    ]
+    client.chat_update.side_effect = SlackApiError(
+        "no", {"error": "message_not_found"}
+    )
+    sm = StreamingMessage(
+        client=client, channel="C1", thread_ts="ts1", min_interval=0.0, max_len=10_000
+    )
+    sm.start()
+    # Three consecutive append -> flush -> chat_update failures. The third one
+    # should trigger a roll.
+    sm.append("alpha")
+    sm.append("beta")
+    sm.append("gamma")
+    assert sm.ts == "rolled"
+    # Buffer preserved: the deltas never reached Slack on the old ts.
+    assert "alpha" in sm._buffer
+    assert "beta" in sm._buffer
+    assert "gamma" in sm._buffer
+    # Failure counter reset after roll so the new ts gets a clean window.
+    assert sm._consecutive_update_failures == 0
+
+
+def test_streaming_message_resets_failure_counter_on_success():
+    """A successful chat_update must reset the consecutive-failure counter."""
+    client = MagicMock()
+    client.api_call.side_effect = SlackApiError("no", {"error": "method_deprecated"})
+    client.chat_postMessage.return_value = {"ok": True, "ts": "ts-a"}
+    call_count = {"n": 0}
+
+    def _flaky_update(**_):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise SlackApiError("transient", {"error": "ratelimited"})
+        return {"ok": True}
+
+    client.chat_update.side_effect = _flaky_update
+    sm = StreamingMessage(
+        client=client, channel="C1", thread_ts="ts1", min_interval=0.0, max_len=10_000
+    )
+    sm.start()
+    sm.append("one")   # fails
+    sm.append("two")   # succeeds, counter resets
+    assert sm._consecutive_update_failures == 0
+    # Still on original ts (no roll) because we only saw 1 failure.
+    assert sm.ts == "ts-a"
 
 
 def test_streaming_message_stop_splits_long_final():
