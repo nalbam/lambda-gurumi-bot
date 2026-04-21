@@ -97,6 +97,26 @@ def test_bedrock_claude_chat_with_tool_use():
     assert result.tool_calls[0].arguments == {"query": "x"}
 
 
+def test_bedrock_nova_coerces_dict_tool_content_to_json():
+    """If a caller hands us a dict as tool content, Nova's `{"text": ...}`
+    block must receive JSON, not Python's repr via str()."""
+    msgs = [
+        {"role": "tool", "tool_call_id": "t1", "content": {"ok": True, "count": 2}},
+    ]
+    translated = BedrockProvider._to_nova_messages(msgs)
+    text = translated[0]["content"][0]["toolResult"]["content"][0]["text"]
+    assert text == '{"ok": true, "count": 2}'
+
+
+def test_bedrock_nova_preserves_string_tool_content():
+    msgs = [
+        {"role": "tool", "tool_call_id": "t1", "content": '{"already":"json"}'},
+    ]
+    translated = BedrockProvider._to_nova_messages(msgs)
+    text = translated[0]["content"][0]["toolResult"]["content"][0]["text"]
+    assert text == '{"already":"json"}'
+
+
 def test_bedrock_message_translation_tool_role():
     messages = [
         {"role": "user", "content": "ask"},
@@ -192,6 +212,80 @@ def test_bedrock_describe_image_returns_text():
     )
     out = provider.describe_image(b"fake", "image/png")
     assert out == "a cat"
+
+
+def test_bedrock_nova_describe_image_uses_converse_not_invoke_model():
+    """Nova text models can't accept Claude's Messages body — describe_image
+    must route to the Converse API with an `image` content block instead."""
+    provider = BedrockProvider(
+        model="amazon.nova-pro-v1:0",
+        image_model="amazon.nova-canvas-v1:0",
+        region="us-east-1",
+    )
+    provider._client = MagicMock()
+    provider._client.converse.return_value = {
+        "output": {"message": {"content": [{"text": "a nova cat"}]}},
+    }
+    out = provider.describe_image(b"bytes", "image/png")
+    assert out == "a nova cat"
+    provider._client.converse.assert_called_once()
+    provider._client.invoke_model.assert_not_called()
+    messages = provider._client.converse.call_args.kwargs["messages"]
+    img_block = next(b for b in messages[0]["content"] if "image" in b)
+    assert img_block["image"]["format"] == "png"
+    assert img_block["image"]["source"] == {"bytes": b"bytes"}
+
+
+def test_bedrock_nova_describe_image_maps_mime_to_nova_format():
+    """image/jpeg must be sent as format='jpeg' (Nova only accepts a short
+    form: png/jpeg/gif/webp)."""
+    provider = BedrockProvider(
+        model="amazon.nova-lite-v1:0",
+        image_model="amazon.nova-canvas-v1:0",
+        region="us-east-1",
+    )
+    provider._client = MagicMock()
+    provider._client.converse.return_value = {
+        "output": {"message": {"content": [{"text": "x"}]}},
+    }
+    provider.describe_image(b"bytes", "image/jpeg")
+    messages = provider._client.converse.call_args.kwargs["messages"]
+    img_block = next(b for b in messages[0]["content"] if "image" in b)
+    assert img_block["image"]["format"] == "jpeg"
+
+
+def test_bedrock_nova_describe_image_inference_profile_routes_to_converse():
+    """`us.amazon.nova-*` inference-profile IDs must still hit the Nova path."""
+    provider = BedrockProvider(
+        model="us.amazon.nova-pro-v1:0",
+        image_model="amazon.nova-canvas-v1:0",
+        region="us-east-1",
+    )
+    provider._client = MagicMock()
+    provider._client.converse.return_value = {
+        "output": {"message": {"content": [{"text": "ok"}]}},
+    }
+    provider.describe_image(b"x", "image/png")
+    provider._client.converse.assert_called_once()
+    provider._client.invoke_model.assert_not_called()
+
+
+def test_bedrock_nova_describe_image_unknown_mime_falls_back_to_png():
+    """Unsupported MIME types must not crash — fall back to 'png' so Nova
+    receives a valid format value."""
+    provider = BedrockProvider(
+        model="amazon.nova-pro-v1:0",
+        image_model="amazon.nova-canvas-v1:0",
+        region="us-east-1",
+    )
+    provider._client = MagicMock()
+    provider._client.converse.return_value = {
+        "output": {"message": {"content": [{"text": "x"}]}},
+    }
+    provider.describe_image(b"bytes", "application/octet-stream")
+    messages = provider._client.converse.call_args.kwargs["messages"]
+    img_block = next(b for b in messages[0]["content"] if "image" in b)
+    assert img_block["image"]["format"] == "png"
 
 
 def test_bedrock_generate_image_titan_returns_bytes():

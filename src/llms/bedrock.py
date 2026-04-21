@@ -244,7 +244,25 @@ class BedrockProvider:
 
     # -- vision / image ----------------------------------------------------- #
 
+    _NOVA_IMAGE_FORMATS = {
+        "image/png": "png",
+        "image/jpeg": "jpeg",
+        "image/jpg": "jpeg",
+        "image/gif": "gif",
+        "image/webp": "webp",
+    }
+
     def describe_image(self, image_bytes: bytes, mime_type: str) -> str:
+        # Family-route the same way chat() does. Nova models speak the Converse
+        # API with an `image` content block; sending Claude's Messages body at a
+        # Nova ID raises ValidationException. Claude (and unknown families, to
+        # preserve prior behaviour for new Claude-compatible IDs) stays on the
+        # Messages API.
+        if self._text_family.startswith("amazon.nova"):
+            return self._nova_describe_image(image_bytes, mime_type)
+        return self._claude_describe_image(image_bytes, mime_type)
+
+    def _claude_describe_image(self, image_bytes: bytes, mime_type: str) -> str:
         encoded = base64.b64encode(image_bytes).decode("utf-8")
         body = {
             "anthropic_version": "bedrock-2023-05-31",
@@ -264,6 +282,27 @@ class BedrockProvider:
         payload = json.loads(response["body"].read())
         for block in payload.get("content", []):
             if block.get("type") == "text":
+                return block.get("text", "")
+        return ""
+
+    def _nova_describe_image(self, image_bytes: bytes, mime_type: str) -> str:
+        fmt = self._NOVA_IMAGE_FORMATS.get((mime_type or "").lower(), "png")
+        client = self._get_client()
+        response = client.converse(
+            modelId=self.model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"text": "Describe this image for a Slack conversation."},
+                        {"image": {"format": fmt, "source": {"bytes": image_bytes}}},
+                    ],
+                }
+            ],
+            inferenceConfig={"maxTokens": 512, "temperature": 0.2},
+        )
+        for block in response.get("output", {}).get("message", {}).get("content", []):
+            if "text" in block:
                 return block.get("text", "")
         return ""
 
@@ -333,6 +372,22 @@ class BedrockProvider:
         return out
 
     @staticmethod
+    def _coerce_nova_text(content: Any) -> str:
+        """Convert arbitrary content into a string suitable for Nova's
+        `{"text": ...}` content block.
+
+        Strings pass through unchanged. Non-strings (dict, list — e.g. if a
+        future caller hands us raw tool_result dicts) are JSON-serialized
+        instead of going through `str(...)`, which would emit Python repr and
+        leave the LLM unable to parse downstream.
+        """
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        return json.dumps(content, ensure_ascii=False)
+
+    @staticmethod
     def _to_nova_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         for msg in messages:
@@ -345,7 +400,7 @@ class BedrockProvider:
                             {
                                 "toolResult": {
                                     "toolUseId": msg.get("tool_call_id", ""),
-                                    "content": [{"text": str(msg.get("content", ""))}],
+                                    "content": [{"text": BedrockProvider._coerce_nova_text(msg.get("content"))}],
                                 }
                             }
                         ],
@@ -354,10 +409,10 @@ class BedrockProvider:
             elif role == "assistant" and msg.get("tool_calls"):
                 blocks: list[dict[str, Any]] = []
                 if msg.get("content"):
-                    blocks.append({"text": msg["content"]})
+                    blocks.append({"text": BedrockProvider._coerce_nova_text(msg["content"])})
                 for tc in msg["tool_calls"]:
                     blocks.append({"toolUse": {"toolUseId": tc["id"], "name": tc["name"], "input": tc.get("arguments", {})}})
                 out.append({"role": "assistant", "content": blocks})
             else:
-                out.append({"role": role or "user", "content": [{"text": str(msg.get("content", ""))}]})
+                out.append({"role": role or "user", "content": [{"text": BedrockProvider._coerce_nova_text(msg.get("content"))}]})
         return out
