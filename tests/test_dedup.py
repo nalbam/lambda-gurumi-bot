@@ -116,3 +116,38 @@ def test_conversation_truncate_helper_direct():
     import json
     assert len(json.dumps(trimmed, ensure_ascii=False)) <= 1200
     assert len(trimmed) < len(msgs)
+
+
+def test_conversation_truncate_keeps_newest_messages():
+    """Truncation drops the oldest entries — the most recent turn must survive
+    as long as it fits."""
+    msgs = [
+        {"role": "user", "content": f"msg-{i}"}
+        for i in range(20)
+    ]
+    trimmed = ConversationStore.truncate_to_chars(msgs, max_chars=200)
+    assert trimmed, "should keep at least some messages"
+    # The newest message must be in the kept suffix.
+    assert trimmed[-1]["content"] == "msg-19"
+
+
+def test_conversation_truncate_budget_matches_exact_dumps_length():
+    """The fast cumulative-size algorithm must agree with the naive
+    json.dumps(kept) size, within a single byte."""
+    import json
+
+    msgs = [{"role": "user", "content": "a" * 17 + str(i)} for i in range(8)]
+    for budget in (50, 80, 120, 200, 300, 500, 1000, 5000):
+        trimmed = ConversationStore.truncate_to_chars(msgs, max_chars=budget)
+        assert len(json.dumps(trimmed, ensure_ascii=False)) <= budget, (
+            f"budget={budget}, kept={len(trimmed)}, "
+            f"actual={len(json.dumps(trimmed, ensure_ascii=False))}"
+        )
+
+
+def test_conversation_truncate_single_large_msg_overflows_budget():
+    """If every individual message exceeds the budget, return an empty list
+    rather than partial garbage."""
+    msgs = [{"role": "user", "content": "x" * 1000}]
+    trimmed = ConversationStore.truncate_to_chars(msgs, max_chars=50)
+    assert trimmed == []

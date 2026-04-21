@@ -125,12 +125,31 @@ class ConversationStore(_BaseStore):
         except ClientError as exc:
             logger.warning("conversation put failed: %s", exc)
 
+    # json.dumps with default separators renders a list as `[item, item, ...]`
+    # so exact serialized size is:  2 (brackets) + sum(sizes) + 2 * (n - 1) (", ")
+    _JSON_ARRAY_BRACKETS = 2
+    _JSON_ITEM_SEPARATOR = 2
+
     @staticmethod
     def truncate_to_chars(messages: list[dict[str, Any]], max_chars: int) -> list[dict[str, Any]]:
-        """Drop oldest messages until total serialized size <= max_chars."""
+        """Drop oldest messages until total serialized size <= max_chars.
+
+        Previous implementation was O(n²) — it re-serialized the full kept
+        list on every pop. This walks the list once, serializes each message
+        individually, then accumulates from the newest end backwards until
+        adding the next (older) message would exceed the budget. Matches the
+        exact byte count of `json.dumps(kept, ensure_ascii=False)` using the
+        default item separator `", "`.
+        """
         if not messages:
             return []
-        out = list(messages)
-        while out and len(json.dumps(out, ensure_ascii=False)) > max_chars:
-            out.pop(0)
-        return out
+        sizes = [len(json.dumps(m, ensure_ascii=False)) for m in messages]
+        total = ConversationStore._JSON_ARRAY_BRACKETS
+        start = len(messages)  # exclusive; empty kept set serializes to "[]"
+        for i in range(len(messages) - 1, -1, -1):
+            add_cost = sizes[i] + (ConversationStore._JSON_ITEM_SEPARATOR if start < len(messages) else 0)
+            if total + add_cost > max_chars:
+                break
+            total += add_cost
+            start = i
+        return messages[start:]
