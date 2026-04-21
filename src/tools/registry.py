@@ -3,16 +3,11 @@
 via the @tool decorator on import."""
 from __future__ import annotations
 
-import json
 import logging
 import time
-import urllib.error
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 from typing import Any, Callable
-
-from botocore.exceptions import BotoCoreError, ClientError
-from slack_sdk.errors import SlackApiError
 
 from src.config import Settings
 from src.llms import LLMProvider, ToolCall
@@ -96,6 +91,7 @@ class ToolExecutor:
         self.registry = registry
         self.timeout = timeout
         self._pool = ThreadPoolExecutor(max_workers=2)
+        self._closed = False
 
     def execute(self, call: ToolCall) -> dict[str, Any]:
         td = self.registry.get(call.name)
@@ -110,18 +106,31 @@ class ToolExecutor:
         except FuturesTimeout:
             logger.warning("tool %s timed out after %.1fs", call.name, effective_timeout)
             return {"ok": False, "error": f"tool '{call.name}' timed out after {effective_timeout}s"}
-        except (
-            TypeError,
-            ValueError,
-            KeyError,
-            urllib.error.URLError,
-            json.JSONDecodeError,
-            SlackApiError,
-            BotoCoreError,
-            ClientError,
-        ) as exc:
+        except Exception as exc:  # noqa: BLE001
+            # Broad catch on purpose: provider SDKs raise their own APIError
+            # hierarchies (openai.APIError, anthropic.APIError, httpx.HTTPError)
+            # that were missing from the previous allowlist — and when they
+            # escaped the executor the whole agent loop aborted with a generic
+            # error instead of handing the failure back to the LLM to recover.
+            # The agent already treats {"ok": False, ...} as a recoverable tool
+            # result, so swallowing here is correct.
             logger.exception("tool %s failed", call.name)
             return {"ok": False, "error": f"{exc.__class__.__name__}: {exc}"}
+
+    def close(self) -> None:
+        """Release the worker pool.
+
+        Called by the owning agent at end-of-request. Safe to call twice.
+        Must be invoked in Lambda warm-start environments — otherwise every
+        request spawns a fresh ThreadPoolExecutor whose non-daemon workers
+        stay in the process-wide registry until interpreter exit.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        # wait=False so a timed-out tool's worker doesn't pin the Lambda
+        # invocation. The stray thread will be cleaned up on GC.
+        self._pool.shutdown(wait=False)
 
 
 # --------------------------------------------------------------------------- #

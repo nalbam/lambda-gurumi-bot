@@ -50,6 +50,9 @@ class SlackMentionAgent:
         self.registry = registry
         self.max_steps = max_steps
         self.executor = tool_executor or ToolExecutor(context, registry)
+        # Only close the executor we created ourselves — an injected one is
+        # owned by the caller (e.g. a test or a shared long-lived harness).
+        self._owns_executor = tool_executor is None
         self.response_language = response_language
         self.system_message = system_message
         self.history = history or []
@@ -59,6 +62,15 @@ class SlackMentionAgent:
         self.max_output_tokens = max_output_tokens
 
     def run(self, user_message: str) -> AgentResult:
+        try:
+            return self._run(user_message)
+        finally:
+            if self._owns_executor:
+                # Release the ThreadPoolExecutor so Lambda warm containers
+                # don't accumulate idle workers across requests.
+                self.executor.close()
+
+    def _run(self, user_message: str) -> AgentResult:
         system = self._build_system_prompt()
         messages: list[dict[str, Any]] = [*self.history, {"role": "user", "content": user_message}]
         seen_calls: set[str] = set()

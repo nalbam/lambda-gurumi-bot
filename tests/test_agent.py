@@ -236,6 +236,57 @@ def test_agent_streams_final_answer_when_on_stream_set():
     assert len(llm.calls) == 1
 
 
+def test_agent_closes_owned_executor_after_run():
+    """SlackMentionAgent must release the ThreadPoolExecutor it created so
+    Lambda warm containers don't accumulate idle workers across requests."""
+    reg = _registry_with_search()
+    llm = ScriptedLLM([LLMResult(content="done", tool_calls=[], stop_reason="end_turn")])
+    agent = SlackMentionAgent(llm=llm, context=_ctx(), registry=reg, max_steps=3)
+    agent.run("q")
+    assert agent.executor._closed is True
+
+
+def test_agent_closes_owned_executor_on_exception():
+    """Even when the LLM raises, the owned executor must still be closed."""
+    reg = _registry_with_search()
+
+    class BoomLLM:
+        def chat(self, *a, **k):
+            raise RuntimeError("boom")
+
+        def stream_chat(self, *a, **k):  # pragma: no cover
+            raise RuntimeError("boom")
+
+        def describe_image(self, *a, **k):  # pragma: no cover
+            return ""
+
+        def generate_image(self, *a, **k):  # pragma: no cover
+            return b""
+
+    agent = SlackMentionAgent(llm=BoomLLM(), context=_ctx(), registry=reg, max_steps=3)
+    import pytest
+
+    with pytest.raises(RuntimeError):
+        agent.run("q")
+    assert agent.executor._closed is True
+
+
+def test_agent_does_not_close_injected_executor():
+    """An externally-supplied ToolExecutor is owned by the caller; the agent
+    must not shut it down."""
+    from src.tools.registry import ToolExecutor
+
+    reg = _registry_with_search()
+    ext_exec = ToolExecutor(_ctx(), reg)
+    llm = ScriptedLLM([LLMResult(content="done", tool_calls=[], stop_reason="end_turn")])
+    agent = SlackMentionAgent(
+        llm=llm, context=_ctx(), registry=reg, max_steps=3, tool_executor=ext_exec
+    )
+    agent.run("q")
+    assert ext_exec._closed is False
+    ext_exec.close()
+
+
 def test_agent_aggregates_token_usage():
     reg = _registry_with_search()
     llm = ScriptedLLM(

@@ -138,3 +138,46 @@ def test_generate_image_tool_has_extended_timeout():
 def test_default_registry_now_includes_fetch_webpage():
     names = set(default_registry.names())
     assert "fetch_webpage" in names
+
+
+def test_executor_wraps_arbitrary_provider_exception():
+    """Tools that call provider SDKs can raise provider-specific errors
+    (openai.APIError, anthropic.APIError, httpx.HTTPError, etc.) which aren't
+    subclasses of ValueError/TypeError. The executor must still surface them
+    as {ok: False, ...} so the LLM can recover — not propagate and abort the
+    whole agent loop."""
+
+    class FakeProviderError(Exception):
+        """Stand-in for openai.APIError / anthropic.APIError etc. — not a
+        subclass of any stdlib exception category the old allowlist knew
+        about."""
+
+    registry = ToolRegistry()
+
+    def provider_call(ctx):
+        raise FakeProviderError("rate limit: try again in 42s")
+
+    registry.register(
+        ToolDef(
+            name="llm_thing",
+            description="",
+            parameters={"type": "object", "properties": {}},
+            fn=provider_call,
+        )
+    )
+    executor = ToolExecutor(_ctx(), registry)
+    result = executor.execute(ToolCall(id="1", name="llm_thing", arguments={}))
+    assert result["ok"] is False
+    assert "FakeProviderError" in result["error"]
+    assert "rate limit" in result["error"]
+
+
+def test_executor_close_is_idempotent():
+    """close() is called by the owning agent at end-of-request — invoking it
+    twice (e.g. agent.run() running then the caller also calling close) must
+    not raise."""
+    registry = ToolRegistry()
+    executor = ToolExecutor(_ctx(), registry)
+    executor.close()
+    executor.close()
+    assert executor._closed is True
