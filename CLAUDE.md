@@ -156,7 +156,7 @@ Separate from the Lambda runtime role. `trust-policy.json` allows both `repo:aws
 
 ## Testing
 
-161 tests, 89% overall coverage. `pytest.ini` pins `testpaths = tests`, `filterwarnings = ignore::DeprecationWarning`. Key approach:
+189 tests, 89% overall coverage. `pytest.ini` pins `testpaths = tests`, `filterwarnings = ignore::DeprecationWarning`. Key approach:
 
 - Tests mirror source layout: `tests/llms/` for each `src/llms/*` submodule, `tests/tools/` for each `src/tools/*` submodule. Top-level `tests/test_agent.py`, `test_config.py`, `test_dedup.py`, `test_logging_utils.py`, `test_slack_helpers.py` cover the non-packaged modules.
 - Shared tool-test fixtures (`_ctx`, `_settings`, `_streamed_read`) live in `tests/tools/_helpers.py` — individual test files import from there instead of redefining them.
@@ -169,9 +169,9 @@ Separate from the Lambda runtime role. `trust-policy.json` allows both `repo:aws
 
 Per-module coverage:
 
-- `agent.py` 96%, `config.py` 98%, `dedup.py` 78%, `slack_helpers.py` 83%, `logging_utils.py` 68%
-- `llms/`: `base.py` 70%, `openai_wire.py` 96%, `openai.py` 100%, `xai.py` 100%, `bedrock.py` 76%, `composite.py` 87%, `factory.py` 94%
-- `tools/`: `registry.py` 100%, `slack.py` 86%, `search.py` 93%, `web.py` 97%, `image.py` 100%, `time.py` 100%
+- `agent.py` 96%, `config.py` 98%, `dedup.py` 80%, `slack_helpers.py` 86%, `logging_utils.py` 68%
+- `llms/`: `base.py` 70%, `openai_wire.py` 96%, `openai.py` 100%, `xai.py` 100%, `bedrock.py` 78%, `composite.py` 87%, `factory.py` 94%
+- `tools/`: `registry.py` 100%, `slack.py` 87%, `search.py` 93%, `web.py` 97%, `image.py` 100%, `time.py` 100%
 
 ## Things that are easy to break
 
@@ -184,6 +184,10 @@ Per-module coverage:
 - **Removing the SSRF guard (`_validate_public_https_url`) on `fetch_webpage`** re-opens fetch to RFC1918 space and cloud-metadata endpoints (e.g. `169.254.169.254`).
 - **Enabling redirects on the `fetch_webpage` raw fallback** — a 302 to a private host bypasses the pre-flight DNS check; keep `_NoRedirectHandler` installed.
 - **DNS rebinding on `fetch_webpage` raw fallback**. The pre-flight `getaddrinfo` check and the eventual TCP connect are two separate DNS lookups; a TTL=0 attacker can flip between them. Lambda's environment makes the attack hard and impact is bounded (no VPC by default), but don't treat `_validate_public_https_url` as a guarantee that the actual connection hits the same IP. If you ever add VPC/private-subnet egress, revisit this.
+- **Dropping the Nova branch in `BedrockProvider.describe_image`**. Nova chat models speak the Converse API with an `image` content block — sending Claude's Messages body at a Nova model ID fails with `ValidationException`. `chat()` already family-routes; the vision entrypoint must do the same.
+- **Removing `SlackMentionAgent`'s `finally: self.executor.close()`**. The agent creates its own `ToolExecutor` (and hence a `ThreadPoolExecutor`) unless one is injected. Without the close, every Lambda warm invocation adds new non-daemon workers to the process registry that never unwind until interpreter exit.
+- **Narrowing `ToolExecutor.execute`'s exception catch back to a stdlib allowlist**. Provider SDKs raise their own (`openai.APIError`, `anthropic.APIError`, `httpx.HTTPError`) that don't inherit from `ValueError`/`TypeError`; when they escape the executor the whole agent loop aborts instead of handing the failure back to the LLM as `{"ok": False, ...}` for recovery.
+- **Applying channel allowlist to DMs**. `_process()` skips `channel_allowed` when `is_dm=True` — DM channel IDs are D-prefixed and not normally in `ALLOWED_CHANNEL_IDS`, so enforcing there would instantly lock out every user's direct-message path the moment an operator set a channel allowlist.
 
 ## Excluded (Phase 2+)
 
