@@ -82,6 +82,14 @@ provider:
             - bedrock:Converse
             - bedrock:ConverseStream
           Resource: "*"
+        # Self-invoke (async) so the receiver path can fire-and-forget a
+        # worker invocation and return HTTP 200 to API Gateway / Slack
+        # within a few hundred ms. Scoped to this function's own ARN.
+        - Effect: Allow
+          Action:
+            - lambda:InvokeFunction
+          Resource:
+            - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${self:service}-${sls:stage}-mention"
 
 plugins:
   - serverless-python-requirements

@@ -1,23 +1,41 @@
 """AWS Lambda entrypoint for the Slack mention bot.
 
-Flow per request:
-  1. lambda_handler short-circuits Slack retries (X-Slack-Retry-Num header).
-  2. Bolt dispatches event to app_mention / message handler.
-  3. Handler acks immediately, then:
-     - Deduplicates on client_msg_id via DynamoDB conditional put.
-     - Checks channel allowlist + per-user throttle.
-     - Sets typing status + sends a placeholder message.
-     - Loads thread history from DynamoDB and runs the native-tool-calling agent.
-     - Streams the final answer into `chat_update` (first chunk) + `chat_postMessage` (rest).
-     - Persists updated conversation back to DynamoDB.
+Two execution paths share this handler via a `_worker` flag in the event
+payload:
+
+  Receiver path (Slack → API Gateway → Lambda):
+    1. lambda_handler short-circuits Slack retries (X-Slack-Retry-Num header).
+    2. Bolt verifies the Slack signature and dispatches to app_mention /
+       message handlers.
+    3. Handler acks, then fires a fire-and-forget `lambda:Invoke` against
+       this same function with `InvocationType=Event` and `_worker=True`.
+    4. HTTP response returns to API Gateway within a few hundred ms, so
+       the 29s API Gateway integration timeout is irrelevant — even a
+       10-minute agent run never blocks the HTTP response.
+
+  Worker path (Lambda async self-invoke):
+    1. `_worker=True` routes straight into _process_worker.
+    2. Deduplicates on client_msg_id via DynamoDB conditional put. This
+       same dedup absorbs both Slack's own retry burst (on the receiver
+       side) AND Lambda async's built-in 2x retry on worker failure — all
+       paths converge on the same dedup:{msg_id} key.
+    3. Checks channel allowlist + per-user throttle.
+    4. Sets typing status + sends a placeholder message.
+    5. Loads thread history from DynamoDB and runs the native-tool-calling
+       agent, then streams/posts the reply back via Slack Web API.
+    6. Persists updated conversation back to DynamoDB.
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 import uuid
 
+import boto3
 from slack_bolt import App
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
+from slack_sdk import WebClient
 
 from src.agent import SlackMentionAgent
 from src.config import Settings
@@ -43,6 +61,7 @@ _llm = None
 _dedup: DedupStore | None = None
 _conversations: ConversationStore | None = None
 _bolt_app: App | None = None
+_lambda_client = None
 
 
 LABELS = {
@@ -103,6 +122,67 @@ def _get_conversations() -> ConversationStore:
     return _conversations
 
 
+def _get_lambda_client():
+    global _lambda_client
+    if _lambda_client is None:
+        _lambda_client = boto3.client("lambda", region_name=settings.aws_region)
+    return _lambda_client
+
+
+def _enqueue_worker(event: dict, is_dm: bool) -> None:
+    """Fire-and-forget async self-invoke.
+
+    Keeps the receiver-path handler short so the HTTP response to API
+    Gateway returns within a few hundred ms, independent of how long the
+    agent takes. When `AWS_LAMBDA_FUNCTION_NAME` isn't set (local dev /
+    tests), falls through to inline execution so the code path is still
+    exercisable outside Lambda.
+    """
+    function_name = os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+    if not function_name:
+        _process_worker({"slack_event": event, "is_dm": is_dm})
+        return
+    payload = json.dumps(
+        {"_worker": True, "slack_event": event, "is_dm": is_dm}, ensure_ascii=False
+    ).encode("utf-8")
+    try:
+        _get_lambda_client().invoke(
+            FunctionName=function_name,
+            InvocationType="Event",
+            Payload=payload,
+        )
+    except Exception:
+        # If async invoke fails (IAM, throttling, network), we don't want
+        # to drop the user's message. Fall back to inline execution inside
+        # the receiver; worst case the receiver's Lambda timeout kicks in,
+        # but that's what we had before this refactor anyway.
+        logger.exception("async worker invoke failed, running inline")
+        _process_worker({"slack_event": event, "is_dm": is_dm})
+
+
+def _process_worker(payload: dict) -> None:
+    """Worker path: full agent run.
+
+    Runs either as a real async Lambda invocation (payload carried across)
+    or inline during local/test execution. We build a fresh `WebClient`
+    from the bot token because the async invocation doesn't carry Bolt's
+    injected client — the receiver's Bolt context dies as soon as the
+    receiver returns HTTP 200.
+    """
+    slack_event = payload.get("slack_event") or {}
+    is_dm = bool(payload.get("is_dm"))
+    channel = slack_event.get("channel")
+    client = WebClient(token=settings.slack_bot_token)
+
+    def _say(text: str, thread_ts: str | None = None) -> None:
+        kwargs: dict = {"channel": channel, "text": text}
+        if thread_ts:
+            kwargs["thread_ts"] = thread_ts
+        client.chat_postMessage(**kwargs)
+
+    _process(slack_event, client, _say, is_dm=is_dm)
+
+
 def _get_bolt_app() -> App:
     global _bolt_app
     if _bolt_app is not None:
@@ -117,7 +197,7 @@ def _get_bolt_app() -> App:
     @app.event("app_mention")
     def _on_mention(event, client, say, ack):  # noqa: ANN001
         ack()
-        _process(event, client, say, is_dm=False)
+        _enqueue_worker(event, is_dm=False)
 
     @app.event("message")
     def _on_message(event, client, say, ack):  # noqa: ANN001
@@ -126,7 +206,7 @@ def _get_bolt_app() -> App:
             return
         if event.get("bot_id") or event.get("subtype"):
             return
-        _process(event, client, say, is_dm=True)
+        _enqueue_worker(event, is_dm=True)
 
     _bolt_app = app
     return _bolt_app
@@ -320,7 +400,16 @@ def _process(event: dict, client, say, is_dm: bool) -> None:  # noqa: ANN001
 
 
 def lambda_handler(event, context):  # noqa: ANN001
-    # Short-circuit Slack retries without re-running the agent.
+    # Worker path: a Lambda async self-invoke with `_worker=True` skips
+    # Slack signature verification entirely. The only way to land here
+    # with this flag is via `_enqueue_worker`, which is only callable
+    # from inside a successfully verified receiver invocation.
+    if isinstance(event, dict) and event.get("_worker"):
+        _process_worker(event)
+        return {"statusCode": 200, "body": ""}
+
+    # Receiver path: Slack HTTP event via API Gateway.
+    # Short-circuit Slack retries without re-dispatching the worker.
     headers = event.get("headers") or {}
     normalized = {k.lower(): v for k, v in headers.items()}
     if normalized.get("x-slack-retry-num"):

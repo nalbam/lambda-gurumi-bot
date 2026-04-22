@@ -96,9 +96,16 @@ Image generation is family-routed too: Titan/Nova-Canvas use `TEXT_IMAGE` task; 
 
 `_CompositeProvider` wraps two providers when text and image providers differ (e.g., OpenAI text + Bedrock image).
 
+### Receiver / worker split via Lambda async self-invoke
+
+`lambda_handler` routes one of two ways based on the event shape:
+
+- **Receiver path** (Slack → API Gateway → Lambda): Bolt verifies the Slack signature and dispatches to the `app_mention` / `message` handlers. Each handler `ack()`s, then calls `_enqueue_worker(event, is_dm)` which issues a single `lambda:Invoke` against this same function with `InvocationType=Event` and a `{"_worker": True, ...}` payload, then returns. The receiver path is back to HTTP 200 within a few hundred ms. That's why Lambda timeout (`serverless.yml: timeout: 300`) can be much larger than the API Gateway REST integration limit (29s) — the receiver never runs long enough to care, and the HTTP response is already home before the worker even starts. Fallback: if `AWS_LAMBDA_FUNCTION_NAME` is unset (local harness) or `lambda.invoke` raises, `_enqueue_worker` runs `_process_worker` inline so the message isn't dropped.
+- **Worker path** (Lambda async self-invoke): `lambda_handler` short-circuits on `event["_worker"] is True` and calls `_process_worker`, which rebuilds a `WebClient` from the bot token (Bolt's injected client is gone — the receiver process exited) and calls `_process(...)`. The full agent run — streaming, tool calls, image generation — happens here, with Lambda's 300s budget all to itself.
+
 ### Slack retry → DynamoDB conditional put dedup
 
-`lambda_handler` short-circuits when `X-Slack-Retry-Num` header is present (returns 200 OK). Even without the retry header, the first line of `_process()` is `DedupStore.reserve(f"dedup:{client_msg_id}")` which does `put_item(ConditionExpression="attribute_not_exists(id)")`. Duplicate key raises `ConditionalCheckFailedException` → False → silent return. This is the only race-safe dedup (get-then-put has a window). TTL 1h via `expire_at`.
+Three converging retry sources all funnel through one key: Slack's own 3-attempt retry schedule on the receiver, AWS Lambda's built-in 2x retry on async worker failure, and any accidental re-dispatch. `lambda_handler` short-circuits when `X-Slack-Retry-Num` header is present (returns 200 OK) so Slack retries never spawn a second worker. Inside the worker, the first line of `_process()` is `DedupStore.reserve(f"dedup:{client_msg_id}")` which does `put_item(ConditionExpression="attribute_not_exists(id)")`. Duplicate key raises `ConditionalCheckFailedException` → False → silent return. This is the only race-safe dedup (get-then-put has a window). TTL 1h via `expire_at`. Lambda async worker retries on the same `_worker` payload also hit the same dedup row, so a transient worker failure that Lambda retries can't produce a second reply.
 
 ### Single table, two key prefixes
 
@@ -139,7 +146,8 @@ Neither extension requires editing the registry or the agent loop.
 ## Deployment
 
 `serverless.yml` provisions:
-- Lambda: python3.12, x86_64, 5120MB, 300s timeout. The 300s value is well beyond the API Gateway REST integration timeout of 29s, but that's fine here — Lambda emits replies via the Slack Web API (`chat_postMessage`, `files_upload_v2`), not through the HTTP response that triggered the invocation, so the API Gateway 504 at 29s doesn't matter as long as dedup absorbs Slack's retry burst. Tool timeouts (e.g. `generate_image` 240s) are sized so that compose + upload + history-save fit in the remaining budget. (x86_64 matches the Ubuntu GitHub Actions runner so pip installs wheels — including native ones like `pydantic_core` — that run on the Lambda runtime. Switching to arm64 requires a Docker-based build path via serverless-python-requirements and is deferred.)
+- Lambda: python3.12, x86_64, 5120MB, 300s timeout. The 300s value only applies to the worker path — the receiver path returns HTTP 200 within a few hundred ms via `_enqueue_worker`'s async self-invoke. The API Gateway REST integration timeout (29s) is only relevant to the receiver, which finishes long before that, so extending the worker budget to 300s (or further, up to Lambda's 900s cap) is safe. Tool timeouts (e.g. `generate_image` 240s) are sized so that compose + upload + history-save fit in the worker's remaining budget. (x86_64 matches the Ubuntu GitHub Actions runner so pip installs wheels — including native ones like `pydantic_core` — that run on the Lambda runtime. Switching to arm64 requires a Docker-based build path via serverless-python-requirements and is deferred.)
+- IAM (runtime Lambda role) also grants `lambda:InvokeFunction` on this function's own ARN so `_enqueue_worker` can fire the async self-invoke.
 - DynamoDB: hash `id`, GSI `user-index` (user + expire_at, KEYS_ONLY), TTL `expire_at`.
 - IAM (runtime Lambda role): `dynamodb:GetItem/PutItem/Query` on table + GSI, `bedrock:InvokeModel*`/`Converse*`.
 
@@ -156,7 +164,7 @@ Separate from the Lambda runtime role. `trust-policy.json` allows both `repo:aws
 
 ## Testing
 
-189 tests, 89% overall coverage. `pytest.ini` pins `testpaths = tests`, `filterwarnings = ignore::DeprecationWarning`. Key approach:
+206 tests, 84% overall coverage (the drop vs. the 89% of `src/*`-only measurement is just `app.py` now being in scope: its `_process` path is exercised by live Slack traffic, not unit tests). `pytest.ini` pins `testpaths = tests`, `filterwarnings = ignore::DeprecationWarning`. Key approach:
 
 - Tests mirror source layout: `tests/llms/` for each `src/llms/*` submodule, `tests/tools/` for each `src/tools/*` submodule. Top-level `tests/test_agent.py`, `test_config.py`, `test_dedup.py`, `test_logging_utils.py`, `test_slack_helpers.py` cover the non-packaged modules.
 - Shared tool-test fixtures (`_ctx`, `_settings`, `_streamed_read`) live in `tests/tools/_helpers.py` — individual test files import from there instead of redefining them.
@@ -169,7 +177,8 @@ Separate from the Lambda runtime role. `trust-policy.json` allows both `repo:aws
 
 Per-module coverage:
 
-- `agent.py` 96%, `config.py` 98%, `dedup.py` 80%, `slack_helpers.py` 86%, `logging_utils.py` 68%
+- `app.py` 35% (routing and worker fan-out covered by `tests/test_app.py`; `_process` is only hit in production)
+- `agent.py` 96%, `config.py` 97%, `dedup.py` 80%, `slack_helpers.py` 86%, `logging_utils.py` 97%
 - `llms/`: `base.py` 70%, `openai_wire.py` 96%, `openai.py` 100%, `xai.py` 100%, `bedrock.py` 78%, `composite.py` 87%, `factory.py` 94%
 - `tools/`: `registry.py` 100%, `slack.py` 87%, `search.py` 93%, `web.py` 97%, `image.py` 100%, `time.py` 100%
 
