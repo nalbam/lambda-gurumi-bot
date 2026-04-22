@@ -139,7 +139,7 @@ Neither extension requires editing the registry or the agent loop.
 ## Deployment
 
 `serverless.yml` provisions:
-- Lambda: python3.12, x86_64, 5120MB, 90s timeout. (x86_64 matches the Ubuntu GitHub Actions runner so pip installs wheels — including native ones like `pydantic_core` — that run on the Lambda runtime. Switching to arm64 requires a Docker-based build path via serverless-python-requirements and is deferred.)
+- Lambda: python3.12, x86_64, 5120MB, 300s timeout. The 300s value is well beyond the API Gateway REST integration timeout of 29s, but that's fine here — Lambda emits replies via the Slack Web API (`chat_postMessage`, `files_upload_v2`), not through the HTTP response that triggered the invocation, so the API Gateway 504 at 29s doesn't matter as long as dedup absorbs Slack's retry burst. Tool timeouts (e.g. `generate_image` 240s) are sized so that compose + upload + history-save fit in the remaining budget. (x86_64 matches the Ubuntu GitHub Actions runner so pip installs wheels — including native ones like `pydantic_core` — that run on the Lambda runtime. Switching to arm64 requires a Docker-based build path via serverless-python-requirements and is deferred.)
 - DynamoDB: hash `id`, GSI `user-index` (user + expire_at, KEYS_ONLY), TTL `expire_at`.
 - IAM (runtime Lambda role): `dynamodb:GetItem/PutItem/Query` on table + GSI, `bedrock:InvokeModel*`/`Converse*`.
 

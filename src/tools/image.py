@@ -14,7 +14,7 @@ from src.tools.registry import ToolContext, default_registry, tool
         "properties": {"prompt": {"type": "string"}},
         "required": ["prompt"],
     },
-    timeout=75.0,  # gpt-image-1 / titan / stability can take 30–60s
+    timeout=240.0,  # gpt-image-2 / titan / stability can take 60–180s; Lambda caps at 300s, leaves ~60s for compose + upload
 )
 def generate_image(ctx: ToolContext, prompt: str) -> dict[str, str]:
     image_bytes = ctx.llm.generate_image(prompt)

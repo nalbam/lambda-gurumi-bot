@@ -12,7 +12,7 @@ provider:
   region: ${env:AWS_REGION, 'us-east-1'}
   stage: ${opt:stage, 'dev'}
   memorySize: 5120
-  timeout: 90
+  timeout: 300
   stackTags:
     katalog_id: "858"
   tags:
