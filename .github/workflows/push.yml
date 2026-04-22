@@ -25,7 +25,7 @@ jobs:
       - name: Set up Node.js 🟢
         uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "24"
 
       - name: Install Python deps 📦
         run: |
@@ -42,7 +42,7 @@ jobs:
           npm install serverless-python-requirements
 
       - name: Configure AWS credentials (OIDC) 🔑
-        uses: aws-actions/configure-aws-credentials@v5
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/lambda-gurumi-bot
           aws-region: us-east-1
