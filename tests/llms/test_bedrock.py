@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -312,3 +312,28 @@ def test_bedrock_generate_image_stability_returns_bytes():
         {"artifacts": [{"base64": base64.b64encode(b"xyz").decode()}]}
     )
     assert provider.generate_image("cat") == b"xyz"
+
+
+def test_bedrock_client_uses_explicit_timeout_and_retry_config():
+    """Regression: default botocore read_timeout=60s + legacy retry=5 turns a
+    single 80-90s Sonnet generation into 5 silent re-invocations that exhaust
+    Lambda's 300s budget before any exception surfaces. The bedrock-runtime
+    client must be built with an explicit Config that aligns read_timeout with
+    the worker Lambda timeout and caps retries at 2 in standard mode."""
+    provider = BedrockProvider(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        image_model="amazon.nova-canvas-v1:0",
+        region="us-east-1",
+    )
+    with patch("src.llms.bedrock.boto3.client") as mock_boto3_client:
+        mock_boto3_client.return_value = MagicMock()
+        provider._get_client()
+
+    mock_boto3_client.assert_called_once()
+    kwargs = mock_boto3_client.call_args.kwargs
+    assert kwargs["region_name"] == "us-east-1"
+    cfg = kwargs["config"]
+    assert cfg.connect_timeout == 10
+    assert cfg.read_timeout == 290
+    assert cfg.retries == {"max_attempts": 2, "mode": "standard"}
+

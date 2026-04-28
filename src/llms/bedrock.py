@@ -8,6 +8,7 @@ import uuid
 from typing import Any, Callable, Literal
 
 import boto3
+from botocore.config import Config
 
 from src.llms.base import LLMResult, ToolCall, ToolSpec, _with_retry
 
@@ -44,7 +45,24 @@ class BedrockProvider:
 
     def _get_client(self):
         if self._client is None:
-            self._client = boto3.client("bedrock-runtime", region_name=self.region)
+            # Claude Sonnet/Opus generations regularly run 60-120s server-side.
+            # botocore's default read_timeout=60s + legacy retry mode (5 attempts)
+            # silently re-invokes the model up to 5x and exhausts Lambda's 300s
+            # budget before any exception surfaces (see: 5x AWS/Bedrock
+            # Invocations metric for a single user turn). Keep the read_timeout
+            # close to the worker Lambda's own timeout, drop retries to standard
+            # mode with 2 attempts so a transient throttle still recovers
+            # without amplifying read-timeout stalls.
+            cfg = Config(
+                connect_timeout=10,
+                read_timeout=290,
+                retries={"max_attempts": 2, "mode": "standard"},
+            )
+            self._client = boto3.client(
+                "bedrock-runtime",
+                region_name=self.region,
+                config=cfg,
+            )
         return self._client
 
     @property
