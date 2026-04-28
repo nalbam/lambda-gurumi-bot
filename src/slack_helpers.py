@@ -19,6 +19,22 @@ PARAGRAPH_SEP = "\n\n"
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 
+def _slack_error_code(exc: SlackApiError) -> str:
+    """Extract the `error` field from a SlackApiError's response payload.
+
+    SlackApiError.response is normally a SlackResponse mapping; access via
+    `.get("error")` works on both dict-like and SlackResponse objects.
+    Falls back to empty string if anything is unexpected.
+    """
+    response = getattr(exc, "response", None)
+    if response is None:
+        return ""
+    try:
+        return response.get("error", "") or ""
+    except (AttributeError, TypeError):
+        return ""
+
+
 class MessageFormatter:
     """Split a long message into Slack-safe chunks.
 
@@ -245,6 +261,18 @@ class StreamingMessage:
             self.client.chat_update(channel=self.channel, ts=self.ts, text=display)
             self._consecutive_update_failures = 0
         except SlackApiError as exc:
+            # msg_too_long is an explicit "this payload exceeds chat.update's
+            # rendered limit" signal — Slack's mrkdwn → section-block coercion
+            # caps a single block at ~3000 chars and fails well before the
+            # documented 4000-char text limit on multibyte/markdown content.
+            # Retrying the same buffer against a fresh ts via _roll_to_new_message
+            # just produces the same failure on the new placeholder, leaving a
+            # trail of empty :loading: messages in the thread. Spill the buffer
+            # via chat.postMessage (40k-char limit, no rolling-update history)
+            # and drop the current placeholder so the next delta starts fresh.
+            if _slack_error_code(exc) == "msg_too_long":
+                self._spill_buffer_via_post_message(text)
+                return
             self._consecutive_update_failures += 1
             logger.warning(
                 "chat_update during stream failed (%d consecutive): %s",
@@ -258,6 +286,35 @@ class StreamingMessage:
             if self._consecutive_update_failures >= self.MAX_CONSECUTIVE_UPDATE_FAILURES:
                 self._consecutive_update_failures = 0
                 self._roll_to_new_message(preserve_buffer=True)
+
+    def _spill_buffer_via_post_message(self, text: str) -> None:
+        """Recover from chat.update msg_too_long by posting the buffered text
+        as fresh thread messages and dropping the current placeholder ts.
+
+        chat.postMessage's 40k-char limit is much more permissive than
+        chat.update's effective ~3k-char limit on multibyte/markdown content,
+        so MessageFormatter.split_message at self.max_len reliably fits.
+        Deleting the (still :loading:) placeholder keeps the thread free of
+        the empty placeholder + spilled-answer "double output" pattern.
+        Setting `self.ts = None` lets the next delta lazy-start a fresh
+        placeholder via the same deferred path used at first delta.
+        """
+        chunks = MessageFormatter.split_message(text, max_len=self.max_len)
+        for chunk in chunks:
+            try:
+                self.client.chat_postMessage(
+                    channel=self.channel, thread_ts=self.thread_ts, text=chunk,
+                )
+            except SlackApiError as exc:
+                logger.warning("spill chat_postMessage failed: %s", exc)
+        if self.ts:
+            try:
+                self.client.chat_delete(channel=self.channel, ts=self.ts)
+            except SlackApiError as exc:
+                logger.debug("placeholder chat_delete after spill failed: %s", exc)
+        self._buffer = ""
+        self._consecutive_update_failures = 0
+        self.ts = None
 
     def _roll_to_new_message(self, preserve_buffer: bool = False) -> None:
         """Open a fresh placeholder message and reset the buffer. Used when
@@ -327,6 +384,13 @@ class StreamingMessage:
             self.client.chat_update(channel=self.channel, ts=self.ts, text=first)
         except SlackApiError as exc:
             logger.warning("final chat_update failed (len=%d): %s", len(first), exc)
+            # Drop the still-:loading: placeholder before posting the answer
+            # via chat.postMessage; otherwise the user sees the placeholder
+            # and the spilled answer side-by-side ("double output").
+            try:
+                self.client.chat_delete(channel=self.channel, ts=self.ts)
+            except SlackApiError as exc2:
+                logger.debug("placeholder chat_delete after final failure: %s", exc2)
             # Fallback to postMessage so at least the text lands somewhere.
             try:
                 self.client.chat_postMessage(

@@ -388,3 +388,63 @@ def test_streaming_message_stop_splits_long_final():
     assert len(follow_calls) >= 1
 
 
+def test_streaming_message_flush_msg_too_long_spills_via_postmessage_and_drops_placeholder():
+    """Regression: chat.update's effective limit on multibyte/markdown content
+    is well under its documented 4000-char cap (mrkdwn → section block coerces
+    to ~3000). Retrying the same buffer against a fresh ts via roll-with-
+    preserve-buffer produces the same failure on every new placeholder, so
+    the user ends up seeing N empty :loading: messages plus the spilled
+    answer ("double output"). msg_too_long must spill via chat.postMessage
+    and chat.delete the placeholder."""
+    client = MagicMock()
+    client.api_call.side_effect = SlackApiError("no", {"error": "method_deprecated"})
+    client.chat_postMessage.return_value = {"ok": True, "ts": "placeholder-ts"}
+    client.chat_update.side_effect = SlackApiError(
+        "too long", {"error": "msg_too_long"}
+    )
+    sm = StreamingMessage(
+        client=client, channel="C1", thread_ts="ts1", min_interval=0.0, max_len=10_000
+    )
+    sm.start()
+    sm.append("a" * 1500)
+
+    # Spill path: at least one chat.postMessage with the buffer body went out,
+    # the placeholder was deleted, and ts is reset so the next delta lazily
+    # opens a fresh placeholder via the deferred-start path.
+    spill_calls = [
+        c
+        for c in client.chat_postMessage.call_args_list
+        if c.kwargs.get("thread_ts") == "ts1" and c.kwargs.get("text", "").startswith("a")
+    ]
+    assert len(spill_calls) >= 1
+    client.chat_delete.assert_called_with(channel="C1", ts="placeholder-ts")
+    assert sm.ts is None
+    assert sm._buffer == ""
+    assert sm._consecutive_update_failures == 0
+
+
+def test_streaming_message_stop_msg_too_long_deletes_placeholder():
+    """If the final chat.update fails (e.g. msg_too_long on a multi-paragraph
+    answer), the placeholder must be deleted before the fallback chat.postMessage
+    so the user doesn't see :loading: alongside the answer."""
+    client = MagicMock()
+    client.api_call.side_effect = SlackApiError("no", {"error": "method_deprecated"})
+    client.chat_postMessage.return_value = {"ok": True, "ts": "placeholder-ts"}
+    client.chat_update.side_effect = SlackApiError(
+        "too long", {"error": "msg_too_long"}
+    )
+    sm = StreamingMessage(client=client, channel="C1", thread_ts="ts1", max_len=10_000)
+    sm.start()
+    sm.stop("final answer")
+
+    client.chat_delete.assert_called_with(channel="C1", ts="placeholder-ts")
+    # Fallback postMessage carries the answer; the start() call also posted a
+    # placeholder, so we filter on the actual answer body.
+    answer_posts = [
+        c
+        for c in client.chat_postMessage.call_args_list
+        if c.kwargs.get("text") == "final answer"
+    ]
+    assert len(answer_posts) == 1
+
+
