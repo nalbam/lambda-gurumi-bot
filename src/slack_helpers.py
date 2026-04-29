@@ -38,11 +38,18 @@ def _slack_error_code(exc: SlackApiError) -> str:
 class MessageFormatter:
     """Split a long message into Slack-safe chunks.
 
-    Strategy (hierarchical):
-      1. Prefer splitting on code fences so multi-line code blocks stay intact.
-      2. Otherwise split on paragraph boundaries (\\n\\n).
-      3. Otherwise split on sentence boundaries.
-      4. Final fallback: hard slice at max_len.
+    Strategy (greedy, paragraph-first):
+      1. Cut at the last \\n\\n that fits inside max_len. This keeps
+         sentences whole and avoids the "mid-word" splits that happen
+         with a hard slice.
+      2. If that cut lands inside a ``` code block, push the whole
+         block to the next chunk by re-cutting at the \\n\\n right
+         before the block opens.
+      3. If the block itself is larger than max_len, cut at the last
+         \\n\\n inside the block (or hard-slice if none), close the
+         current chunk with \\n``` and reopen the next chunk with ```\\n.
+      4. When no \\n\\n is available within max_len at all, fall back
+         to a sentence boundary (.!? + whitespace), then hard-slice.
     """
 
     @staticmethod
@@ -52,64 +59,69 @@ class MessageFormatter:
         if len(text) <= max_len:
             return [text]
 
-        if CODE_FENCE in text:
-            parts = text.split(CODE_FENCE)
-            chunks: list[str] = []
-            for idx, part in enumerate(parts):
-                wrapped = f"{CODE_FENCE}{part}{CODE_FENCE}" if idx % 2 == 1 else part
-                if not wrapped:
-                    continue
-                chunks.extend(MessageFormatter._split_text(wrapped, max_len))
-            return MessageFormatter._merge_small(chunks, max_len)
-
-        return MessageFormatter._split_text(text, max_len)
-
-    @staticmethod
-    def _split_text(text: str, max_len: int) -> list[str]:
-        if len(text) <= max_len:
-            return [text]
         chunks: list[str] = []
-        for paragraph in text.split(PARAGRAPH_SEP):
-            if len(paragraph) <= max_len:
-                chunks.append(paragraph)
-                continue
-            # paragraph too long: split by sentence
-            buf = ""
-            for sentence in SENTENCE_SPLIT_RE.split(paragraph):
-                if not sentence:
-                    continue
-                candidate = f"{buf} {sentence}".strip() if buf else sentence
-                if len(candidate) > max_len:
-                    if buf:
-                        chunks.append(buf)
-                    # sentence itself too long -> hard slice
-                    while len(sentence) > max_len:
-                        chunks.append(sentence[:max_len])
-                        sentence = sentence[max_len:]
-                    buf = sentence
+        remaining = text
+        fence_suffix = "\n" + CODE_FENCE
+        fence_prefix = CODE_FENCE + "\n"
+
+        while len(remaining) > max_len:
+            # 1. Greedy paragraph-boundary cut within max_len.
+            cut = remaining.rfind(PARAGRAPH_SEP, 0, max_len)
+            if cut > 0:
+                first = remaining[:cut]
+                tail_start = cut + len(PARAGRAPH_SEP)
+            else:
+                first, tail_start = MessageFormatter._fallback_cut(remaining, max_len)
+
+            # 2. Code-fence balancing: an odd ``` count means the cut
+            #    landed inside a code block.
+            if first.count(CODE_FENCE) % 2 == 1:
+                last_fence = first.rfind(CODE_FENCE)
+                # Try pushing the whole block to the next chunk by
+                # cutting at the \n\n right before the block opens.
+                block_start_cut = first.rfind(PARAGRAPH_SEP, 0, last_fence)
+                if block_start_cut > 0:
+                    first = remaining[:block_start_cut]
+                    tail_start = block_start_cut + len(PARAGRAPH_SEP)
                 else:
-                    buf = candidate
-            if buf:
-                chunks.append(buf)
-        return MessageFormatter._merge_small(chunks, max_len)
+                    # Block won't fit anywhere whole. Cut inside the block,
+                    # leaving room for the closing fence so the chunk still
+                    # respects max_len.
+                    inner_budget = max_len - len(fence_suffix)
+                    inner_cut = remaining.rfind(PARAGRAPH_SEP, 0, inner_budget)
+                    if inner_cut > 0:
+                        first = remaining[:inner_cut]
+                        tail_start = inner_cut + len(PARAGRAPH_SEP)
+                    else:
+                        first = remaining[:inner_budget]
+                        tail_start = inner_budget
+                    chunks.append(first + fence_suffix)
+                    remaining = fence_prefix + remaining[tail_start:]
+                    continue
+
+            chunks.append(first)
+            remaining = remaining[tail_start:]
+
+        if remaining:
+            chunks.append(remaining)
+
+        return chunks
 
     @staticmethod
-    def _merge_small(chunks: Iterable[str], max_len: int) -> list[str]:
-        out: list[str] = []
-        buf = ""
-        for chunk in chunks:
-            if not chunk:
-                continue
-            candidate = f"{buf}{PARAGRAPH_SEP}{chunk}" if buf else chunk
-            if len(candidate) <= max_len:
-                buf = candidate
-            else:
-                if buf:
-                    out.append(buf)
-                buf = chunk
-        if buf:
-            out.append(buf)
-        return out or [""]
+    def _fallback_cut(text: str, max_len: int) -> tuple[str, int]:
+        """Choose a cut when no \\n\\n boundary exists within max_len.
+
+        Prefer the last sentence boundary inside max_len; otherwise
+        hard-slice at max_len.
+        """
+        last_match = None
+        for match in SENTENCE_SPLIT_RE.finditer(text):
+            if match.start() >= max_len:
+                break
+            last_match = match
+        if last_match is not None:
+            return text[: last_match.start()], last_match.end()
+        return text[:max_len], max_len
 
 
 def set_thread_status(client: Any, channel: str, thread_ts: str, status: str) -> None:

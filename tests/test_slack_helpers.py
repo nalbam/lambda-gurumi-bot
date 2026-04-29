@@ -42,18 +42,77 @@ def test_split_keeps_small_code_blocks_intact():
 
 
 def test_split_code_block_longer_than_max_len_still_respects_limit():
-    """When a code block exceeds max_len, fences may not balance per chunk,
-    but no chunk may exceed max_len."""
+    """When a code block exceeds max_len, the splitter cuts inside the
+    block, closes the current chunk with ``` and reopens the next one
+    with ```. Every chunk must still fit max_len AND be self-balanced."""
     code = "```\n" + ("def x():\n    return 1\n" * 100) + "```"
     chunks = MessageFormatter.split_message(code, max_len=500)
     assert all(len(c) <= 500 for c in chunks)
-    # Total fence count preserved across all chunks.
-    total_fences = sum(c.count("```") for c in chunks)
-    assert total_fences == 2
+    # Each chunk closes its own code block — no chunk leaks an unclosed
+    # fence into the user's thread view.
+    assert all(c.count("```") % 2 == 0 for c in chunks)
 
 
 def test_split_empty_string():
     assert MessageFormatter.split_message("", max_len=100) == [""]
+
+
+def test_split_cuts_at_paragraph_boundary_not_mid_word():
+    """The greedy \\n\\n cut must keep words and sentences whole rather
+    than slicing in the middle of a paragraph."""
+    para1 = "First paragraph. " * 10  # ~170 chars
+    para2 = "Second paragraph. " * 10  # ~180 chars
+    para3 = "Third paragraph. " * 10  # ~170 chars
+    text = f"{para1}\n\n{para2}\n\n{para3}"
+    chunks = MessageFormatter.split_message(text, max_len=200)
+    # Every chunk should end at a paragraph or sentence boundary, never
+    # in the middle of a word like "para" + "graph".
+    for chunk in chunks:
+        assert not chunk.endswith("para"), f"mid-word cut: {chunk!r}"
+        # Trailing chars should be one of: full word, period+space, or end-of-text
+        assert chunk[-1] in ".!? \n" or chunk == chunks[-1]
+
+
+def test_split_pushes_code_block_to_next_chunk_when_possible():
+    """If the cut would land inside a code block but a \\n\\n exists
+    right before the block starts, push the whole block to the next
+    chunk so the block stays intact."""
+    text = (
+        "intro paragraph\n\n"
+        "another intro paragraph\n\n"
+        "```\n"
+        "def example():\n"
+        "    return 42\n"
+        "```\n\n"
+        "epilogue"
+    )
+    # Force a cut that initially lands inside the code block.
+    chunks = MessageFormatter.split_message(text, max_len=60)
+    # The code block must appear whole in some chunk — never split
+    # across two chunks when it could have been pushed.
+    block = "```\ndef example():\n    return 42\n```"
+    assert any(block in c for c in chunks), f"block was split: {chunks}"
+    # All chunks fit and are self-balanced.
+    assert all(len(c) <= 60 for c in chunks)
+    assert all(c.count("```") % 2 == 0 for c in chunks)
+
+
+def test_split_inside_code_block_uses_inner_paragraph_break():
+    """When the block itself is too large, cut at the last \\n\\n
+    inside the block and re-fence both sides."""
+    inner_para1 = "a " * 50  # ~100 chars
+    inner_para2 = "b " * 50  # ~100 chars
+    inner_para3 = "c " * 50  # ~100 chars
+    text = f"```\n{inner_para1}\n\n{inner_para2}\n\n{inner_para3}\n```"
+    chunks = MessageFormatter.split_message(text, max_len=150)
+    # Length budget respected on every chunk.
+    assert all(len(c) <= 150 for c in chunks), [len(c) for c in chunks]
+    # Every chunk is self-balanced: it opens with ``` and closes with ```
+    # so the user never sees an unclosed code block.
+    for chunk in chunks:
+        assert chunk.count("```") % 2 == 0, f"unbalanced fence: {chunk!r}"
+        assert chunk.startswith("```")
+        assert chunk.rstrip().endswith("```")
 
 
 def test_user_name_cache_uses_display_name():
