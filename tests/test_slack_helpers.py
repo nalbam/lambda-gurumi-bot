@@ -448,3 +448,76 @@ def test_streaming_message_stop_msg_too_long_deletes_placeholder():
     assert len(answer_posts) == 1
 
 
+def test_streaming_message_stop_skips_already_rolled_prefix():
+    """Regression: when streaming rolled to a new ts via the size-overflow
+    path, stop(final_text) must skip the prefix already sealed into the
+    earlier ts. Otherwise the latest ts gets overwritten with content that
+    overlaps the rolled message above it, producing two near-identical
+    messages (prefix in ts1, prefix in ts2, then the suffix as ts3)."""
+    client = MagicMock()
+    client.api_call.side_effect = SlackApiError("no", {"error": "method_deprecated"})
+    client.chat_postMessage.side_effect = [
+        {"ok": True, "ts": "ts1"},
+        {"ok": True, "ts": "ts2"},
+        {"ok": True, "ts": "ts3"},
+        {"ok": True, "ts": "ts4"},
+    ]
+    client.chat_update.return_value = {"ok": True}
+
+    sm = StreamingMessage(
+        client=client, channel="C1", thread_ts="thread-1", min_interval=0.0, max_len=50
+    )
+    sm.start()
+
+    # Stream ~60 chars to trigger one roll-finalize: ts1 sealed, ts2 placeholder.
+    prefix = "A" * 60
+    sm.append(prefix)
+    assert sm.ts == "ts2"
+
+    # Stream the suffix into ts2.
+    suffix = "B" * 30
+    final_text = sm._finalized_text + suffix
+    sm.append(suffix)
+
+    # Final compose call: pass the FULL streamed content. stop() should
+    # recognize the rolled prefix and only send the suffix to ts2.
+    sm.stop(final_text)
+
+    # ts1 was rolled-finalized via chat_update with the prefix.
+    assert any(
+        call.kwargs.get("ts") == "ts1" and call.kwargs.get("text") == prefix
+        for call in client.chat_update.call_args_list
+    )
+    # ts2 was finalized via chat_update with ONLY the suffix — never the
+    # prefix-overlapping content that caused the duplication bug.
+    ts2_finalize_calls = [
+        call for call in client.chat_update.call_args_list
+        if call.kwargs.get("ts") == "ts2" and not call.kwargs.get("text", "").endswith(":robot_face:")
+    ]
+    assert ts2_finalize_calls, "expected a final chat_update on ts2"
+    for call in ts2_finalize_calls:
+        text = call.kwargs.get("text", "")
+        assert prefix not in text, f"ts2 finalize must not contain the rolled prefix: {text!r}"
+
+
+def test_streaming_message_stop_unchanged_when_no_roll():
+    """Without rolling, stop(final_text) should behave exactly as before:
+    one chat_update on the placeholder ts with the full text."""
+    client = MagicMock()
+    client.api_call.side_effect = SlackApiError("no", {"error": "method_deprecated"})
+    client.chat_postMessage.return_value = {"ok": True, "ts": "only-ts"}
+    client.chat_update.return_value = {"ok": True}
+
+    sm = StreamingMessage(
+        client=client, channel="C1", thread_ts="thread-1", min_interval=0.0, max_len=10_000
+    )
+    sm.start()
+    sm.stop("hello world")
+
+    final_calls = [
+        call for call in client.chat_update.call_args_list
+        if call.kwargs.get("text") == "hello world"
+    ]
+    assert len(final_calls) == 1
+
+

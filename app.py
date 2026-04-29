@@ -370,17 +370,17 @@ def _process(event: dict, client, say, is_dm: bool) -> None:  # noqa: ANN001
         return
 
     final_text = result.text or "(응답을 생성하지 못했습니다)"
-    # Split the answer by Slack's per-message limit. StreamingMessage.stop()
-    # handles split internally when a placeholder exists; when it doesn't
-    # (no stream deltas ever arrived — e.g. a provider that returned content
-    # all at once), we post the chunks as fresh thread messages instead.
-    chunks = MessageFormatter.split_message(final_text, max_len=settings.max_len_slack)
+    # StreamingMessage.stop() handles split + follow-up postMessage internally,
+    # AND skips any prefix already sealed into earlier rolled ts'es by the
+    # size-overflow roll path. Pass full final_text so the slice can match.
+    # When no placeholder exists (no stream deltas ever arrived), post the
+    # chunks as fresh thread messages.
     if stream_msg.ts is not None:
-        stream_msg.stop(chunks[0])
+        stream_msg.stop(final_text)
     else:
-        client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=chunks[0])
-    for extra in chunks[1:]:
-        client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=extra)
+        chunks = MessageFormatter.split_message(final_text, max_len=settings.max_len_slack)
+        for chunk in chunks:
+            client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=chunk)
     # Explicitly clear the typing-style status indicator. Slack usually
     # auto-clears it when the bot posts a reply, but an explicit clear
     # ensures there's no stale line left over from the last on_step update.

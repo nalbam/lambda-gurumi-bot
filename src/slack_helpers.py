@@ -182,6 +182,12 @@ class StreamingMessage:
         self._native = False  # True once chat.startStream succeeds
         self._stopped = False
         self._consecutive_update_failures = 0
+        # Concatenation of every prefix already sealed into earlier ts'es by
+        # the size-overflow roll-finalize path. stop() uses this to skip the
+        # part of final_text that is already on screen, otherwise the latest
+        # ts gets overwritten with a chunk whose content overlaps the rolled
+        # message above it ("first two messages are nearly identical").
+        self._finalized_text = ""
 
     # -- start ---------------------------------------------------------- #
 
@@ -251,10 +257,14 @@ class StreamingMessage:
         # behind a msg_too_long error on the next update.
         display = text + " " + self.placeholder
         if len(display) >= self.max_len:
+            sealed = False
             try:
                 self.client.chat_update(channel=self.channel, ts=self.ts, text=text)
+                sealed = True
             except SlackApiError as exc:
                 logger.warning("chat_update (roll-finalize) failed: %s", exc)
+            if sealed:
+                self._finalized_text += text
             self._roll_to_new_message()
             return
         try:
@@ -354,6 +364,14 @@ class StreamingMessage:
         if self._stopped or not self.ts:
             return
         self._stopped = True
+
+        # If streaming rolled to a new ts via the size-overflow path, the
+        # earlier ts'es already display the prefix portion of the answer.
+        # Strip that prefix here so the latest ts gets only the suffix
+        # instead of overwriting itself with content already shown above
+        # (the "first two messages nearly identical" duplication).
+        if self._finalized_text and final_text.startswith(self._finalized_text):
+            final_text = final_text[len(self._finalized_text):]
 
         if self._native:
             # Native streaming: stopStream accepts up to 12k chars, but be
