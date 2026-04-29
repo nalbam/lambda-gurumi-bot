@@ -18,7 +18,8 @@ def _clear_env(monkeypatch):
         "SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET", "LLM_PROVIDER", "LLM_MODEL",
         "IMAGE_PROVIDER", "IMAGE_MODEL", "OPENAI_API_KEY", "RESPONSE_LANGUAGE",
         "AGENT_MAX_STEPS", "DYNAMODB_TABLE_NAME", "AWS_REGION", "ALLOWED_CHANNEL_IDS",
-        "ALLOWED_CHANNEL_MESSAGE", "MAX_LEN_SLACK", "MAX_THROTTLE_COUNT",
+        "ALLOWED_CHANNEL_MESSAGE", "ALLOWED_USER_IDS", "ALLOWED_USER_MESSAGE",
+        "MAX_LEN_SLACK", "MAX_THROTTLE_COUNT",
         "MAX_HISTORY_CHARS", "BOT_CURSOR", "SYSTEM_MESSAGE", "PERSONA_MESSAGE", "TAVILY_API_KEY", "XAI_API_KEY", "LOG_LEVEL",
         "DEFAULT_TIMEZONE", "MAX_DOC_CHARS", "MAX_DOC_PAGES", "MAX_DOC_BYTES",
         "MAX_WEB_CHARS", "MAX_WEB_BYTES", "MAX_WEB_LINKS", "JINA_READER_BASE",
@@ -37,6 +38,8 @@ def test_defaults(monkeypatch, reload_config):
     assert s.agent_max_steps == 3
     assert s.max_len_slack == 2000
     assert s.allowed_channel_ids == []
+    assert s.allowed_user_ids == []
+    assert s.allowed_user_message == "허용된 유저만 응답합니다."
     assert s.tavily_api_key is None
 
 
@@ -75,6 +78,15 @@ def test_list_env_none_sentinel(monkeypatch, reload_config):
     monkeypatch.setenv("ALLOWED_CHANNEL_IDS", "None")
     s = reload_config()
     assert s.allowed_channel_ids == []
+
+
+def test_allowed_user_ids_parsed_from_env(monkeypatch, reload_config):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("ALLOWED_USER_IDS", "U1,U2, U3 ")
+    monkeypatch.setenv("ALLOWED_USER_MESSAGE", "허용된 유저만 응답합니다.")
+    s = reload_config()
+    assert s.allowed_user_ids == ["U1", "U2", "U3"]
+    assert s.allowed_user_message == "허용된 유저만 응답합니다."
 
 
 def test_require_slack_credentials_raises_when_missing(monkeypatch, reload_config):

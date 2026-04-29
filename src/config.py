@@ -96,6 +96,8 @@ class Settings:
     aws_region: str
     allowed_channel_ids: list[str] = field(default_factory=list)
     allowed_channel_message: str = ""
+    allowed_user_ids: list[str] = field(default_factory=list)
+    allowed_user_message: str = ""
     max_len_slack: int = 3000
     max_throttle_count: int = 100
     max_history_chars: int = 4000
@@ -140,7 +142,9 @@ class Settings:
             dynamodb_table_name=os.getenv("DYNAMODB_TABLE_NAME", "lambda-gurumi-bot-dev").strip(),
             aws_region=os.getenv("AWS_REGION", "us-east-1").strip(),
             allowed_channel_ids=_list_env("ALLOWED_CHANNEL_IDS"),
-            allowed_channel_message=os.getenv("ALLOWED_CHANNEL_MESSAGE", "").strip(),
+            allowed_channel_message=os.getenv("ALLOWED_CHANNEL_MESSAGE", "구루미에게 질문은 {} 채널을 이용해 주세요~").strip(),
+            allowed_user_ids=_list_env("ALLOWED_USER_IDS"),
+            allowed_user_message=os.getenv("ALLOWED_USER_MESSAGE", "허용된 유저만 응답합니다.").strip(),
             max_len_slack=_int_env("MAX_LEN_SLACK", 2000, minimum=500),
             max_throttle_count=_int_env("MAX_THROTTLE_COUNT", 100, minimum=1),
             max_history_chars=_int_env("MAX_HISTORY_CHARS", 4000, minimum=500),

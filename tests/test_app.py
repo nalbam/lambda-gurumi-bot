@@ -318,3 +318,238 @@ def test_process_worker_tolerates_missing_fields(app_module, monkeypatch):
     app_module._process_worker({})
 
     assert seen == {"event": {}, "is_dm": False}
+
+
+# --------------------------------------------------------------------------- #
+# Channel allowlist — block reply with first-channel substitution
+# --------------------------------------------------------------------------- #
+
+
+class _FakeDedup:
+    """Minimal DedupStore stand-in: reserve always succeeds, no throttle."""
+
+    def reserve(self, key, user="system"):
+        return True
+
+    def count_user_active(self, user):
+        return 0
+
+
+def test_process_blocked_channel_substitutes_first_allowed_channel(app_module, monkeypatch):
+    """비허용 채널 응답의 `{}` 는 ALLOWED_CHANNEL_IDS 의 첫 번째 채널로 치환되며,
+    Slack 채널 멘션 형식(`<#ID>`)으로 감싸 클릭 가능한 링크로 렌더되어야 한다."""
+    import dataclasses
+
+    override = dataclasses.replace(
+        app_module.settings,
+        allowed_channel_ids=["C04PPA399CP", "C08A9550X"],
+        allowed_channel_message="구루미에게 질문은 {} 채널을 이용해 주세요~",
+    )
+    monkeypatch.setattr(app_module, "settings", override)
+    monkeypatch.setattr(app_module, "_get_dedup", lambda: _FakeDedup())
+
+    posts = []
+
+    def fake_say(text, thread_ts=None):
+        posts.append({"text": text, "thread_ts": thread_ts})
+
+    event = {
+        "channel": "C-BLOCKED",
+        "ts": "1700000000.000100",
+        "text": "hi",
+        "user": "U1",
+        "client_msg_id": "msg-block-1",
+    }
+    app_module._process(event, client=object(), say=fake_say, is_dm=False)
+
+    assert posts == [
+        {
+            "text": "구루미에게 질문은 <#C04PPA399CP> 채널을 이용해 주세요~",
+            "thread_ts": "1700000000.000100",
+        }
+    ]
+
+
+def test_process_blocked_channel_message_without_placeholder_unchanged(app_module, monkeypatch):
+    """`{}` 가 없는 메시지는 가공 없이 그대로 전송되어야 한다."""
+    import dataclasses
+
+    override = dataclasses.replace(
+        app_module.settings,
+        allowed_channel_ids=["C04PPA399CP"],
+        allowed_channel_message="허용되지 않은 채널입니다.",
+    )
+    monkeypatch.setattr(app_module, "settings", override)
+    monkeypatch.setattr(app_module, "_get_dedup", lambda: _FakeDedup())
+
+    posts = []
+    app_module._process(
+        {
+            "channel": "C-X",
+            "ts": "1.1",
+            "text": "hi",
+            "user": "U1",
+            "client_msg_id": "msg-block-2",
+        },
+        client=object(),
+        say=lambda text, thread_ts=None: posts.append({"text": text, "thread_ts": thread_ts}),
+        is_dm=False,
+    )
+
+    assert posts == [{"text": "허용되지 않은 채널입니다.", "thread_ts": "1.1"}]
+
+
+def test_process_blocked_channel_no_message_when_unset(app_module, monkeypatch):
+    """ALLOWED_CHANNEL_MESSAGE 가 비어 있으면 차단된 채널에서 아무 응답도 가지 않는다."""
+    import dataclasses
+
+    override = dataclasses.replace(
+        app_module.settings,
+        allowed_channel_ids=["C04PPA399CP"],
+        allowed_channel_message="",
+    )
+    monkeypatch.setattr(app_module, "settings", override)
+    monkeypatch.setattr(app_module, "_get_dedup", lambda: _FakeDedup())
+
+    posts = []
+    app_module._process(
+        {
+            "channel": "C-X",
+            "ts": "1.1",
+            "text": "hi",
+            "user": "U1",
+            "client_msg_id": "msg-block-3",
+        },
+        client=object(),
+        say=lambda text, thread_ts=None: posts.append({"text": text, "thread_ts": thread_ts}),
+        is_dm=False,
+    )
+
+    assert posts == []
+
+
+# --------------------------------------------------------------------------- #
+# User allowlist — block reply with first-user substitution (channel + DM)
+# --------------------------------------------------------------------------- #
+
+
+def test_process_blocked_user_substitutes_first_allowed_user(app_module, monkeypatch):
+    """비허용 유저 응답의 `{}` 는 ALLOWED_USER_IDS 의 첫 번째 유저를
+    Slack 멘션 형식(`<@ID>`)으로 치환해야 한다. 채널 검사를 통과한 뒤에도 유저로
+    차단되는 케이스."""
+    import dataclasses
+
+    override = dataclasses.replace(
+        app_module.settings,
+        allowed_channel_ids=[],  # 채널 검사 통과
+        allowed_user_ids=["U-ADMIN", "U-OPS"],
+        allowed_user_message="이 봇은 {} 만 답변합니다.",
+    )
+    monkeypatch.setattr(app_module, "settings", override)
+    monkeypatch.setattr(app_module, "_get_dedup", lambda: _FakeDedup())
+
+    posts = []
+    app_module._process(
+        {
+            "channel": "C-OK",
+            "ts": "1.1",
+            "text": "hi",
+            "user": "U-RANDOM",
+            "client_msg_id": "msg-user-1",
+        },
+        client=object(),
+        say=lambda text, thread_ts=None: posts.append({"text": text, "thread_ts": thread_ts}),
+        is_dm=False,
+    )
+
+    assert posts == [{"text": "이 봇은 <@U-ADMIN> 만 답변합니다.", "thread_ts": "1.1"}]
+
+
+def test_process_blocked_user_applies_in_dm(app_module, monkeypatch):
+    """유저 화이트리스트는 DM 경로에도 적용되어야 한다 — 채널 화이트리스트와의
+    핵심 차이. is_dm=True 라도 비허용 유저는 차단 메시지를 받는다."""
+    import dataclasses
+
+    override = dataclasses.replace(
+        app_module.settings,
+        allowed_user_ids=["U-ADMIN"],
+        allowed_user_message="DM 도 차단합니다.",
+    )
+    monkeypatch.setattr(app_module, "settings", override)
+    monkeypatch.setattr(app_module, "_get_dedup", lambda: _FakeDedup())
+
+    posts = []
+    app_module._process(
+        {
+            "channel": "D-DM",
+            "ts": "1.1",
+            "text": "hi",
+            "user": "U-RANDOM",
+            "client_msg_id": "msg-user-2",
+        },
+        client=object(),
+        say=lambda text, thread_ts=None: posts.append({"text": text, "thread_ts": thread_ts}),
+        is_dm=True,
+    )
+
+    assert posts == [{"text": "DM 도 차단합니다.", "thread_ts": "1.1"}]
+
+
+def test_process_blocked_user_no_message_when_unset(app_module, monkeypatch):
+    """ALLOWED_USER_MESSAGE 가 비어 있으면 차단된 유저에게 응답이 가지 않는다."""
+    import dataclasses
+
+    override = dataclasses.replace(
+        app_module.settings,
+        allowed_user_ids=["U-ADMIN"],
+        allowed_user_message="",
+    )
+    monkeypatch.setattr(app_module, "settings", override)
+    monkeypatch.setattr(app_module, "_get_dedup", lambda: _FakeDedup())
+
+    posts = []
+    app_module._process(
+        {
+            "channel": "C-OK",
+            "ts": "1.1",
+            "text": "hi",
+            "user": "U-RANDOM",
+            "client_msg_id": "msg-user-3",
+        },
+        client=object(),
+        say=lambda text, thread_ts=None: posts.append({"text": text, "thread_ts": thread_ts}),
+        is_dm=False,
+    )
+
+    assert posts == []
+
+
+def test_process_blocked_channel_short_circuits_before_user_check(app_module, monkeypatch):
+    """채널·유저 둘 다 차단인 경우 채널 메시지 한 번만 전송 — 유저 검사로 진행 안 됨."""
+    import dataclasses
+
+    override = dataclasses.replace(
+        app_module.settings,
+        allowed_channel_ids=["C-OK"],
+        allowed_channel_message="채널 차단",
+        allowed_user_ids=["U-ADMIN"],
+        allowed_user_message="유저 차단",
+    )
+    monkeypatch.setattr(app_module, "settings", override)
+    monkeypatch.setattr(app_module, "_get_dedup", lambda: _FakeDedup())
+
+    posts = []
+    app_module._process(
+        {
+            "channel": "C-BAD",
+            "ts": "1.1",
+            "text": "hi",
+            "user": "U-RANDOM",
+            "client_msg_id": "msg-both-1",
+        },
+        client=object(),
+        say=lambda text, thread_ts=None: posts.append({"text": text, "thread_ts": thread_ts}),
+        is_dm=False,
+    )
+
+    assert posts == [{"text": "채널 차단", "thread_ts": "1.1"}]

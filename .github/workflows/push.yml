@@ -74,6 +74,8 @@ jobs:
           # --- vars: Access control / throttle ---
           ALLOWED_CHANNEL_IDS: ${{ vars.ALLOWED_CHANNEL_IDS }}
           ALLOWED_CHANNEL_MESSAGE: ${{ vars.ALLOWED_CHANNEL_MESSAGE }}
+          ALLOWED_USER_IDS: ${{ vars.ALLOWED_USER_IDS }}
+          ALLOWED_USER_MESSAGE: ${{ vars.ALLOWED_USER_MESSAGE }}
           MAX_THROTTLE_COUNT: ${{ vars.MAX_THROTTLE_COUNT }}
           # --- vars: Storage ---
           MAX_HISTORY_CHARS: ${{ vars.MAX_HISTORY_CHARS }}
