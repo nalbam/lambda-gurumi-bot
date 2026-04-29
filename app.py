@@ -253,6 +253,21 @@ def _process(event: dict, client, say, is_dm: bool) -> None:  # noqa: ANN001
         log_event(logger, "channel.blocked", channel=channel)
         return
 
+    # User allowlist applies to channels AND DMs. Unlike the channel allowlist
+    # (which exempts DMs because DM channel IDs are D-prefixed and wouldn't
+    # be enrolled), restricting *who* can talk to the bot is meaningful in
+    # both directions — arguably more so in DMs, where there's no channel-
+    # level gate at all. Operator opts in via ALLOWED_USER_IDS; empty list
+    # means everyone is allowed.
+    if settings.allowed_user_ids and user not in settings.allowed_user_ids:
+        msg = settings.allowed_user_message or ""
+        if msg and "{}" in msg:
+            msg = msg.replace("{}", f"<@{settings.allowed_user_ids[0]}>")
+        if msg:
+            say(text=msg, thread_ts=thread_ts)
+        log_event(logger, "user.blocked", user=user, channel=channel)
+        return
+
     try:
         active = dedup.count_user_active(user)
     except Exception as exc:  # noqa: BLE001

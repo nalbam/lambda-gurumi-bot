@@ -59,7 +59,9 @@ Slack 멘션·DM 을 AWS Lambda 에서 처리하고, OpenAI · AWS Bedrock · xA
 | `DYNAMODB_TABLE_NAME` | | `lambda-gurumi-bot-dev` | dedup / 대화 저장 테이블 |
 | `AWS_REGION` | | `us-east-1` | AWS 리전 |
 | `ALLOWED_CHANNEL_IDS` | | (empty) | 콤마 구분. 비어있으면 모든 채널 허용. **DM(`message.im`) 은 허용 리스트 대상이 아님** — allowlist 를 설정해도 DM 경로는 항상 허용됨 |
-| `ALLOWED_CHANNEL_MESSAGE` | | — | 비허용 채널 응답 메시지 (DM 에는 적용되지 않음) |
+| `ALLOWED_CHANNEL_MESSAGE` | | — | 비허용 채널 응답 메시지 (DM 에는 적용되지 않음). `{}` 가 있으면 `ALLOWED_CHANNEL_IDS` 의 첫 채널을 `<#ID>` 멘션 형태로 치환 |
+| `ALLOWED_USER_IDS` | | (empty) | 콤마 구분. 비어있으면 모든 유저 허용. **채널·DM 모든 경로에 적용** — DM 도 차단 |
+| `ALLOWED_USER_MESSAGE` | | — | 비허용 유저 응답 메시지. `{}` 가 있으면 `ALLOWED_USER_IDS` 의 첫 유저를 `<@ID>` 멘션 형태로 치환 |
 | `MAX_LEN_SLACK` | | `3000` | 메시지 분할 기준 (≥500). `.env.example` · `serverless.yml` 기본 `3000`, 미지정 시 `config.py` 폴백 `2000`. |
 | `MAX_OUTPUT_TOKENS` | | `4096` | LLM hop 당 출력 토큰 상한 (≥256) |
 | `MAX_THROTTLE_COUNT` | | `100` | 유저별 동시 요청 상한 |
@@ -128,7 +130,7 @@ aws iam attach-role-policy --role-name "${NAME}" --policy-arn "arn:aws:iam::${AC
 ### 2. GitHub 저장소 설정
 
 - **Secrets**: `AWS_ACCOUNT_ID`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `OPENAI_API_KEY`, `XAI_API_KEY`(xAI 사용 시), `TAVILY_API_KEY`(선택)
-- **Variables**: `LLM_PROVIDER`, `LLM_MODEL`, `IMAGE_PROVIDER`, `IMAGE_MODEL`, `RESPONSE_LANGUAGE`, `ALLOWED_CHANNEL_IDS`, `ALLOWED_CHANNEL_MESSAGE`, `SYSTEM_MESSAGE`, `PERSONA_MESSAGE`, `BOT_CURSOR`, `MAX_LEN_SLACK`, `MAX_OUTPUT_TOKENS`, `MAX_THROTTLE_COUNT`, `MAX_HISTORY_CHARS`, `AGENT_MAX_STEPS`, `LOG_LEVEL`, `DEFAULT_TIMEZONE`, `MAX_DOC_CHARS`, `MAX_DOC_PAGES`, `MAX_DOC_BYTES`, `MAX_WEB_CHARS`, `MAX_WEB_BYTES`, `MAX_WEB_LINKS`, `JINA_READER_BASE`
+- **Variables**: `LLM_PROVIDER`, `LLM_MODEL`, `IMAGE_PROVIDER`, `IMAGE_MODEL`, `RESPONSE_LANGUAGE`, `ALLOWED_CHANNEL_IDS`, `ALLOWED_CHANNEL_MESSAGE`, `ALLOWED_USER_IDS`, `ALLOWED_USER_MESSAGE`, `SYSTEM_MESSAGE`, `PERSONA_MESSAGE`, `BOT_CURSOR`, `MAX_LEN_SLACK`, `MAX_OUTPUT_TOKENS`, `MAX_THROTTLE_COUNT`, `MAX_HISTORY_CHARS`, `AGENT_MAX_STEPS`, `LOG_LEVEL`, `DEFAULT_TIMEZONE`, `MAX_DOC_CHARS`, `MAX_DOC_PAGES`, `MAX_DOC_BYTES`, `MAX_WEB_CHARS`, `MAX_WEB_BYTES`, `MAX_WEB_LINKS`, `JINA_READER_BASE`
 
 ### 3. 배포
 
