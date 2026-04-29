@@ -246,6 +246,8 @@ def _process(event: dict, client, say, is_dm: bool) -> None:  # noqa: ANN001
     # workspace install permission already gates who can open the DM.
     if not is_dm and not channel_allowed(channel, settings.allowed_channel_ids):
         msg = settings.allowed_channel_message or ""
+        if msg and "{}" in msg and settings.allowed_channel_ids:
+            msg = msg.replace("{}", f"<#{settings.allowed_channel_ids[0]}>")
         if msg:
             say(text=msg, thread_ts=thread_ts)
         log_event(logger, "channel.blocked", channel=channel)
